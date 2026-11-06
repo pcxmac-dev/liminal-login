@@ -166,6 +166,8 @@ def test_the_login_folder_is_the_data_folders_unless_said(monkeypatch, tmp_path)
     monkeypatch.setenv("LIMINAL_LOGIN_DIR", str(tmp_path / "x"))
     assert login_dir() == tmp_path / "x"
     monkeypatch.delenv("LIMINAL_LOGIN_DIR")
-    assert login_dir().name == "login" and login_dir().parent.name == "data"
+    from liminal_libs.layout import data_dir
+
+    assert login_dir() == data_dir() / "login"  # the workspace's store/data, or ~/LiminalData without one (CI)
     monkeypatch.setenv("LIMINAL_LOGIN_PORT", "8800")
     assert LoginApp(tmp_path / "x", log=lambda m: None).port() == 8800
