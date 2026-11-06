@@ -1,0 +1,18 @@
+/* The login app's own look, on the library's liminal.css: the user card and the pairs. */
+.login-icon { color: var(--accent); display: grid; place-items: center; margin-bottom: 4px; }
+.user-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.user-head .avatar { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent); color: #fff; font-weight: 600; font-size: 16px; }
+.user-head h1 { margin: 0; }
+.pairs { margin-top: 8px; }
+.pairs td.value { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 12px;
+  max-width: 320px; overflow-wrap: anywhere; }
+.pairs td.tools { white-space: nowrap; text-align: right; }
+.pairs .kind { display: inline-block; padding: 1px 6px; border: 1px solid var(--border); border-radius: 9px;
+  font-size: 11px; color: var(--muted); }
+.add-pair { display: grid; grid-template-columns: 1.4fr 0.8fr 1fr 1.6fr auto; gap: 8px; align-items: end; margin-top: 8px; }
+.add-pair .field { margin: 0; }
+details.change { margin-top: 14px; }
+details.change summary { cursor: pointer; color: var(--muted); }
+.ico { vertical-align: -3px; }
+@media (max-width: 720px) { .add-pair { grid-template-columns: 1fr 1fr; } }
