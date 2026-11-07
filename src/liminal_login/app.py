@@ -29,8 +29,6 @@ from urllib.parse import unquote
 from liminal_libs.apps import SESSION_HEADER, App, Refused
 from liminal_libs.layout import data_dir
 from liminal_libs.mail import MailError, Mailer, mask
-from liminal_libs.web import cookie
-
 from .users import CODE_MINUTES, User, UserStore
 from .vault import KeyPairStore, store_file
 
@@ -112,8 +110,21 @@ class LoginApp(App):
         return max(minutes, 0.1) * 60
 
     # -- sessions --------------------------------------------------------------------------------
+    def _tokens(self, handler) -> list[str]:
+        """The session tokens a request carries: the header's, then every cookie of this app's name
+        (a browser may hold more than one, from another path or an earlier sign-in: the live one counts)."""
+        out = [handler.headers.get(SESSION_HEADER) or ""]
+        for part in (handler.headers.get("Cookie") or "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == self.cookie_name:
+                out.append(value)
+        return [t for t in out if t]
+
     def _token(self, handler) -> str | None:
-        return handler.headers.get(SESSION_HEADER) or cookie(handler, self.cookie_name)
+        tokens = self._tokens(handler)
+        with self._lock:
+            live = [t for t in tokens if t in self._sessions]
+        return live[0] if live else (tokens[0] if tokens else None)
 
     def session(self, handler) -> Session | None:
         """The request's session, its idle clock reset; None when there is none, or it idled out
@@ -223,9 +234,10 @@ class LoginApp(App):
                 raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password")
             return self._signed_in(user)
         if path == "/api/sign-out" and method == "POST":
-            s = self._end(self._token(handler))
-            if s is not None:
-                self.log(f"login: {s.user.name} signed out")
+            for token in self._tokens(handler):  # every session this browser carries
+                s = self._end(token)
+                if s is not None:
+                    self.log(f"login: {s.user.name} signed out")
             return 200, {"signedOut": True}, self._cookie(None)
         if path == "/api/me" and method == "GET":
             return 200, self._me(self._require(handler))

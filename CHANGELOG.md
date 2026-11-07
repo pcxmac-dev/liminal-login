@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 (2026-11-06)
+
+A browser carrying several cookies of this app's name (another path, an earlier sign-in): the live
+session counts, and sign-out ends every session the browser carries.
+
 ## 0.3.0 (2026-11-06)
 
 The sign-up in the user's order ("sign up lets you put in an email and sends an email to an email account,
