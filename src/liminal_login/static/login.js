@@ -62,6 +62,7 @@
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('user', 56)}</div>
       <h1>${first ? `Welcome to ${esc(forTitle)}` : `Sign in to ${esc(forTitle)}`}</h1>
+      ${st.scope ? `<p class="muted scope">${esc(st.scope.label)}</p>` : ''}
       <p class="muted">${first ? 'No account yet. Sign up: a code goes to your email, then you choose your account name and password.'
         : 'Your account name (or email) and password open your keys and accounts.'}</p>
       ${first ? '' : `<form id="signin">
@@ -72,7 +73,9 @@
         <div class="row end"><button type="submit" class="accent">Sign in</button></div>
         <p id="err" class="error"></p></form>`}
       <p class="muted">${mail ? `<button type="button" id="toSignup" class="${first ? 'accent' : ''}">Sign up</button>`
-        : 'Signing up needs email sending set up on this machine (LIMINAL_SMTP_HOST=direct with LIMINAL_SMTP_FROM, your address; or a mail account: _HOST, _USER, _PASSWORD, _FROM), or <code>liminal-login user add NAME</code> at the command line.'}</p>
+        : (st.scope && st.scope.kind === 'local'
+          ? 'A local login: the first user is made here, more by a signed-in user or <code>liminal-login user add NAME</code>.'
+          : `Signing up needs an email server for ${esc(st.scope ? st.scope.domain : 'the domain')}: none in its mail record and none named in liminal-login.cfg under [mail] (or <code>liminal-login user add NAME</code>).`)}</p>
     </div>`;
     if (!first) {
       $('signin').addEventListener('submit', async (e) => {

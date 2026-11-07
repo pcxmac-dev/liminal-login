@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from liminal_libs.apps import Scope
 from liminal_libs.mail import Mailer, MailSettings
 
 from liminal_login.app import LoginApp
@@ -65,7 +66,7 @@ def served_mail(folder):
     """The app for charts with a mail account: accounts are made with a code."""
     lines: list[str] = []
     mailer = FakeMailer(configured=True)
-    app = LoginApp(folder, log=lines.append, failure_delay=0, mailer=mailer)
+    app = LoginApp(folder, log=lines.append, failure_delay=0, mailer=mailer, scope=Scope.for_domain("example.test"))
     url = app.start(0)
     yield app, _port(url), lines, mailer
     app.close()
@@ -79,5 +80,7 @@ def _not_this_machines_mail_account(monkeypatch):
 
     monkeypatch.setattr(mail, "_saved", lambda: {})
     monkeypatch.setattr(mail, "_secret", lambda name: None)
+    monkeypatch.setenv("LIMINAL_LOGIN_CFG", "")  # nor this machine's login file: a test's login is local to its folder
+    monkeypatch.setattr(Scope, "find", classmethod(lambda cls, start=None, env=None: None))
     for v in mail.ALL_VARS:
         monkeypatch.delenv(v, raising=False)

@@ -132,6 +132,33 @@ def test_a_signing_key_for_the_users_domain_its_record_and_whether_it_is_publish
     assert cli.main(["--dir", str(folder), "status", "--port", "1"]) == 0 and "signed under liminal._domainkey.your-domain.example" in capsys.readouterr().out
 
 
+def test_the_logins_file_ties_it_to_a_folder_or_a_domain(folder, tmp_path, monkeypatch, capsys):
+    # the user, 2026-11-06: "use a url regardless, file if local, domain w/ email server in mail record"
+    project = tmp_path / "project"
+    project.mkdir()
+    assert cli.main(["init", str(project), "--title", "My project", "--serves", "charts, integrator"]) == 0
+    out = capsys.readouterr().out
+    cfg = project / "liminal-login.cfg"
+    assert cfg.is_file() and "scope = file:///" in out and "A local login" in out and "serves = charts, integrator" in cfg.read_text()
+    assert cli.main(["init", str(project)]) == 1 and "there already" in capsys.readouterr().err
+    assert cli.main(["--cfg", str(cfg), "status", "--port", "1"]) == 0 and f"local to {project.resolve()}" in capsys.readouterr().out
+    domain_cfg = tmp_path / "domain.cfg"
+    assert cli.main(["init", "Example.test", "--members", "any", "--port", "8811", "--cfg", str(domain_cfg)]) == 0
+    out = capsys.readouterr().out
+    assert "scope = https://example.test" in out and "members = any" in out and "the domain's own mail record" in out
+    assert cli.main(["init", "https:///", "--cfg", str(tmp_path / "bad.cfg")]) == 2
+    # the file decides the users' folder and the port; the status says what the login is tied to
+    monkeypatch.delenv("LIMINAL_LOGIN_DIR", raising=False)
+    monkeypatch.setattr(cli, "login_dir", lambda: tmp_path / "data" / "login")
+    typed = iter(["correct horse battery", "correct horse battery"])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": next(typed))
+    assert cli.main(["--cfg", str(domain_cfg), "user", "add", "Ada"]) == 0
+    assert (tmp_path / "data" / "login" / "example.test" / "charts" / "users.db").is_file()  # the domain's folder, then the app's
+    assert cli.main(["--cfg", str(domain_cfg), "status", "--port", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "1 user(s)" in out and "@example.test" in out
+
+
 def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):
     ran: list = []
     monkeypatch.setattr(LoginApp, "serve", lambda self, port=None, open_browser=False, stop=None, until_quiet=None:

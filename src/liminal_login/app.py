@@ -26,9 +26,10 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import unquote
 
-from liminal_libs.apps import SESSION_HEADER, App, Refused
+from liminal_libs import layout
+from liminal_libs.apps import SESSION_HEADER, App, Refused, Scope
 from liminal_libs.layout import data_dir
-from liminal_libs.mail import MailError, Mailer, mask
+from liminal_libs.mail import MailError, Mailer, mask, mx_records
 from .users import CODE_MINUTES, User, UserStore
 from .vault import KeyPairStore, store_file
 
@@ -50,6 +51,14 @@ def login_dir() -> Path:
     in a repository; each namespace has a folder of its own inside it."""
     raw = (os.environ.get(DIR_VAR) or "").strip()
     return Path(raw) if raw else data_dir() / "login"
+
+
+MX_SECONDS = 600.0  # a domain's mail record is looked up again after this long
+
+
+def folder_for(root: Path, scope: Scope, namespace: str) -> Path:
+    """The namespace's folder under `root`: a domain's login keeps a folder per domain first."""
+    return root / scope.domain / namespace if scope.kind == "domain" else root / namespace
 
 
 def namespace_of(value=None) -> str:
@@ -82,24 +91,61 @@ class LoginApp(App):
     API = "1.2"
 
     def __init__(self, directory: Path | None = None, log=print, failure_delay: float = FAILURE_DELAY_S, mailer=None,
-                 namespace: str | None = None):
+                 namespace: str | None = None, scope: Scope | None = None):
         super().__init__(log)
         self.namespace = namespace_of(namespace)
         self.title_for, self.PORT = NAMESPACES.get(self.namespace, (f"Liminal {self.namespace.capitalize()}", 8795))
         self.TITLE = f"Login: {self.title_for}"
         self.cookie_name = f"liminal_login_{self.namespace.replace('-', '_')}"  # cookies ignore ports: one a namespace
-        self.root = Path(directory) if directory else login_dir()
-        self.dir = self.root / self.namespace
+        # What this login is tied to (liminal_libs.apps.scope; the user, 2026-11-06: "login apps tied to domains
+        # (with email server) or local (file://project/folder)"): the scope given, else the file found (not
+        # when the users' folder is given outright: a test's), else local to the folder, else to the workspace
+        self.scope = scope or (Scope.find() if directory is None else None) \
+            or Scope.local(Path(directory) if directory else (layout.home() or login_dir()))
+        self.root = Path(directory) if directory else (login_dir() if (os.environ.get(DIR_VAR) or "").strip()
+                                                       else self.scope.data_dir(login_dir()))
+        self.dir = folder_for(self.root, self.scope, self.namespace)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.users = UserStore(self.dir / "users.db")
-        self.mailer = mailer or Mailer(log=self.log)
+        self.mailer = mailer or Mailer(log=self.log, cfg=self.scope.mail_variables())
+        self._exchangers: tuple[float, list[str]] | None = None  # the domain's mail record, looked up now and then
         self.last_sent: dict | None = None  # the mail server's word on the last code sent (the status, the page)
         self.failure_delay = failure_delay
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
 
     def describe(self) -> dict:
-        return {**super().describe(), "for": self.namespace, "forTitle": self.title_for}
+        return {**super().describe(), "for": self.namespace, "forTitle": self.title_for, "scope": self.scope.describe()}
+
+    def port(self) -> int:
+        """LIMINAL_LOGIN_PORT, else the scope's file's port, else the namespace's."""
+        raw = (os.environ.get(self.PORT_VAR) or "").strip()
+        return int(raw) if raw.isdecimal() else (self.scope.port or self.PORT)
+
+    # -- whether an account can be made with a code (the user, 2026-11-06: "only allow signup if the login app
+    # is tied to an smtp server"; "domain w/ email server in mail record (lookup) or specified if none") -----
+    def signup_closed_why(self) -> str:
+        """Why no sign-up by email here, or "" when there is one: a local login takes none; a domain's needs
+        an email server, the one its mail record names or the one its file's [mail] names."""
+        if self.scope.kind != "domain":
+            return (f"this login is local ({self.scope.label}): no sign-up by email; the first user is made here, "
+                    "the next by a signed-in user or `liminal-login user add NAME`")
+        s = self.mailer.settings
+        if not s.configured:
+            return "email sending is not set up: " + "; ".join(s.problems()) + " (or `liminal-login user add NAME` here)"
+        if s.direct and not self._domain_mail_record():
+            return (f"no email server for {self.scope.domain}: none in its mail record (MX) and none named in "
+                    "liminal-login.cfg's [mail] (or `liminal-login user add NAME` here)")
+        return ""
+
+    def signup_open(self) -> bool:
+        return self.signup_closed_why() == ""
+
+    def _domain_mail_record(self) -> list[str]:
+        now = time.monotonic()
+        if self._exchangers is None or now - self._exchangers[0] > MX_SECONDS:
+            self._exchangers = (now, mx_records(self.scope.domain) or [])
+        return self._exchangers[1]
 
     @property
     def session_seconds(self) -> float:
@@ -201,8 +247,9 @@ class LoginApp(App):
         if path == "/api/status" and method == "GET":
             s = self.session(handler)
             return 200, {"users": self.users.count(), "signedIn": s is not None, "name": s.user.name if s else None,
-                         "for": self.namespace, "forTitle": self.title_for,
-                         "signup": {"email": self.mailer.configured, **self.mailer.settings.describe(), "lastSent": self.last_sent},
+                         "for": self.namespace, "forTitle": self.title_for, "scope": self.scope.describe(),
+                         "signup": {"email": self.signup_open(), **self.mailer.settings.describe(), "lastSent": self.last_sent,
+                                    "why": self.signup_closed_why()},
                          "app": self.describe()}
         if path == "/api/users" and method == "GET":
             self._require(handler)
@@ -210,7 +257,7 @@ class LoginApp(App):
         if path == "/api/users" and method == "POST":
             if self.users.count() and self.session(handler) is None:
                 raise Refused(HTTPStatus.UNAUTHORIZED, "sign in to add a user")
-            if not self.users.count() and self.mailer.configured:
+            if not self.users.count() and self.signup_open():
                 raise Refused(HTTPStatus.CONFLICT, "the first account is made with a code sent to your email (sign up)")
             try:
                 user = self.users.create(body.get("name"), body.get("password"), body.get("email") or None)
@@ -294,10 +341,14 @@ class LoginApp(App):
         return receipt
 
     def _signup(self, body: dict):
-        """An email: its code goes out; the sign-up waits for it."""
-        if not self.mailer.configured:
-            raise Refused(HTTPStatus.SERVICE_UNAVAILABLE, "email sending is not set up on this machine: "
-                          + "; ".join(self.mailer.settings.problems()) + " (or `liminal-login user add NAME` here)")
+        """An email: its code goes out; the sign-up waits for it. Only a domain's login with an email server
+        takes sign-ups, for addresses at the domain unless its file says `members = any`."""
+        why = self.signup_closed_why()
+        if why:
+            raise Refused(HTTPStatus.SERVICE_UNAVAILABLE, why)
+        email = (body.get("email") or "").strip().lower()
+        if self.scope.members == "domain" and not email.endswith("@" + self.scope.domain):
+            raise Refused(HTTPStatus.BAD_REQUEST, f"this login is for {self.scope.domain}: an address at it")
         try:
             code = self.users.start_signup(body.get("email"))
         except ValueError as e:

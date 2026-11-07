@@ -45,6 +45,26 @@ cookie under `store/data/login/<for>/`. The users' file and the stores live in
   programs given its token (`X-Liminal-Session`); it ends at sign-out or after
   `LIMINAL_LOGIN_SESSION_MINUTES` (480) without a request.
 
+## What a login is tied to: liminal-login.cfg
+
+The user's words: "have like a setup.cfg for the login, and then like other web apps use that cfg file to
+decide the domain/scope of the login"; "login apps tied to domains (with email server) or local
+(file://project/folder)". The file's `[login] scope` is a URL:
+
+- `file:///C:/Users/you/source/liminal`: a local login for that project folder. No email, no sign-up: the
+  first user is made on the page or with `liminal-login user add NAME`, the next by a signed-in user. The
+  users live in the folder's `store/data/login/` (or `.liminal/login/`).
+- `https://your-domain.example`: the domain's users (`members = any` lets other addresses in). Codes go
+  through the domain's own email server, the one its mail record (MX) names, unless `[mail]` names a server
+  to send through; a domain with neither takes no sign-up. The users live under the data folder's
+  `login/<domain>/`.
+
+`liminal-login init file:///... | https://domain [--title T] [--serves charts,integrator] [--port P]` writes
+the file (a local one into the folder itself, a domain's into the workspace); `liminal-login --cfg PATH`
+or `LIMINAL_LOGIN_CFG` names it, else every app finds `liminal-login.cfg` in the workspace, in the working
+folder or one above it, or in the data folder's `login/`. The charts front starts the login with the file
+it finds, and the page says what the login is tied to.
+
 ## Sending the codes
 
 Set it once from the command line: `liminal-login mail setup` asks for the account and keeps the settings as

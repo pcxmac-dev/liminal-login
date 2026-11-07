@@ -133,6 +133,10 @@ def test_the_first_account_is_made_with_a_code_when_mail_is_set_up(served_mail):
     st = _call(port, "GET", "/api/status")[1]
     assert st["users"] == 0 and st["signup"]["email"] is True and st["signup"]["host"] == "smtp.example.test"
     assert st["for"] == "charts" and st["forTitle"] == "Liminal Charts" and "password" not in json.dumps(st["signup"])
+    # a domain's login: its users at the domain, its folders under the domain's
+    assert st["scope"]["kind"] == "domain" and st["scope"]["domain"] == "example.test" and app.dir == app.root / "example.test" / "charts"
+    status, data, _ = _call(port, "POST", "/api/signup", {"email": "ada@elsewhere.test"})
+    assert status == 400 and "example.test" in data["error"]
     # the plain first-user route is closed: a code is the way
     assert _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})[0] == 409
     status, data, _ = _call(port, "POST", "/api/signup", {"email": "ada@example.test"})
@@ -185,7 +189,7 @@ def test_without_a_mail_account_the_first_user_is_made_on_the_page_and_a_signup_
     st = _call(port, "GET", "/api/status")[1]
     assert st["signup"]["email"] is False and st["signup"]["configured"] is False
     status, data, _ = _call(port, "POST", "/api/signup", {"email": "ada@example.test"})
-    assert status == 503 and "LIMINAL_SMTP_HOST" in data["error"] and "user add" in data["error"]
+    assert status == 503 and "local" in data["error"] and "user add" in data["error"] and st["scope"]["kind"] == "local"
     status, data, _ = _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery", "email": "ada@example.test"})
     assert status == 201 and data["email"] == "ada@example.test" and data["verified"] is False
 
@@ -213,3 +217,36 @@ def test_each_login_serves_one_app_in_its_own_namespace(folder, monkeypatch):
     finally:
         charts.close()
         integrator.close()
+
+
+def test_a_domain_login_takes_signups_only_with_an_email_server(folder, monkeypatch):
+    # the user, 2026-11-06: "only allow signup if the login app is tied to an smtp server"; "domain w/ email
+    # server in mail record (lookup) or specified if none in the domain lookup"
+    from liminal_libs.apps import Scope
+    from liminal_libs.mail import MailSettings
+
+    from conftest import FakeMailer
+    from liminal_login import app as app_mod
+
+    app = LoginApp(folder, log=lambda m: None, failure_delay=0, mailer=FakeMailer(configured=False), scope=Scope.for_domain("example.test"))
+    try:
+        assert app.describe()["scope"]["kind"] == "domain" and app.dir == folder / "example.test" / "charts"
+        assert not app.signup_open() and "not set up" in app.signup_closed_why()
+        app.mailer.settings = MailSettings(host="direct", sender="login@example.test")  # the domain's own mail record
+        monkeypatch.setattr(app_mod, "mx_records", lambda d: [] if d == "example.test" else None)
+        assert not app.signup_open() and "none in its mail record" in app.signup_closed_why()
+        app._exchangers = None
+        monkeypatch.setattr(app_mod, "mx_records", lambda d: ["mx.example.test"])
+        assert app.signup_open() and app.signup_closed_why() == ""
+        app.mailer.settings = MailSettings(host="127.0.0.1", port=1025, sender="login@example.test")  # a server named
+        monkeypatch.setattr(app_mod, "mx_records", lambda d: [])
+        app._exchangers = None
+        assert app.signup_open()
+        local = LoginApp(folder, log=lambda m: None, mailer=FakeMailer(configured=True))
+        try:
+            assert local.describe()["scope"]["kind"] == "local" and not local.signup_open() and "local" in local.signup_closed_why()
+            assert local.dir == folder / "charts"
+        finally:
+            local.close()
+    finally:
+        app.close()

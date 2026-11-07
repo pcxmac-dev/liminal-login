@@ -14,21 +14,34 @@ import os
 import sys
 from pathlib import Path
 
-from liminal_libs import secrets, web
+from liminal_libs import layout, secrets, web
+from liminal_libs.apps import FILE_NAME, Scope
 from liminal_libs.config import save_user_variable
 from liminal_libs.logs import Logger
 from liminal_libs.mail import FROM_VAR, HOST_VAR, PASSWORD_VAR, PORT_VAR, SECURITY_VAR, USER_VAR, MailError, Mailer, MailSettings
 
 from . import __version__
-from .app import LoginApp, login_dir, namespace_of
+from .app import DIR_VAR, LoginApp, folder_for, login_dir, namespace_of
 from .users import UserStore
 
 
 QUIET_SECONDS = 600.0  # `serve --until-quiet`: the server ends after this long without a request (LIMINAL_QUIET_SECONDS)
 
 
+def _scope(args) -> Scope | None:
+    """What the login is tied to: the file named (--cfg, LIMINAL_LOGIN_CFG), else the one found; None: none."""
+    cfg = getattr(args, "cfg", None)
+    return Scope.read(Path(cfg)) if cfg else Scope.find()
+
+
 def _root(args) -> Path:
-    return Path(args.dir) if getattr(args, "dir", None) else login_dir()
+    """Where the users' folders live: --dir, else LIMINAL_LOGIN_DIR, else where the scope keeps them."""
+    if getattr(args, "dir", None):
+        return Path(args.dir)
+    if (os.environ.get(DIR_VAR) or "").strip():
+        return login_dir()
+    scope = _scope(args)
+    return scope.data_dir(login_dir()) if scope is not None else login_dir()
 
 
 def _namespace(args) -> str:
@@ -37,7 +50,8 @@ def _namespace(args) -> str:
 
 def _dir(args) -> Path:
     """The namespace's folder: the users' file and the stores of the app this login serves."""
-    return _root(args) / _namespace(args)
+    root = _root(args)
+    return folder_for(root, _scope(args) or Scope.local(root), _namespace(args))
 
 
 def _log(folder: Path) -> Logger:
@@ -46,7 +60,7 @@ def _log(folder: Path) -> Logger:
 
 def cmd_serve(args) -> int:
     folder = _dir(args)
-    app = LoginApp(_root(args), log=_log(folder), namespace=_namespace(args))
+    app = LoginApp(_root(args), log=_log(folder), namespace=_namespace(args), scope=_scope(args))
     port = args.port if args.port is not None else app.port()
     mail = app.mailer.settings
     print(f"login app for {app.title_for}: its page at {app.url(port)} (the folder {folder}; "
@@ -67,12 +81,14 @@ def cmd_status(args) -> int:
         names = users.names()
     finally:
         users.close()
-    port = LoginApp(_root(args), log=lambda m: None, namespace=_namespace(args)).port() if not args.port else args.port
+    scope = _scope(args) or Scope.local(_root(args))
+    port = LoginApp(_root(args), log=lambda m: None, namespace=_namespace(args), scope=scope).port() if not args.port else args.port
     mail = MailSettings.from_env()
     print(f"login app for {_namespace(args)}: {len(names)} user(s) in {folder / 'users.db'}; "
           f"{'answering' if web.listening(port) else 'not running'} at port {port}; "
           f"mail {'through ' + mail.host + ' as ' + (mail.user or mail.sender) if mail.configured else 'not set up (' + '; '.join(mail.problems()) + ')'}"
-          + (f"; signed under {mail.dkim_record}" if mail.signing else ""))
+          + (f"; signed under {mail.dkim_record}" if mail.signing else "")
+          + f"; {scope.label}" + (f" ({scope.path})" if scope.path else ""))
     for u in names:
         print(f"  {u['name']}: created {u['createdAt']}, last sign-in {u['seenAt'] or 'never'}"
               + (f", {u['email']}{' (verified)' if u['verified'] else ''}" if u["email"] else ""))
@@ -139,17 +155,26 @@ def mail_setup(args, ask=None, hidden=None) -> int:
         user = ask(f"User, the account's address [{now.user}]: ").strip() or now.user
         password = hidden("Password (typed hidden; empty keeps the one kept): ") if user else ""
     sender = ask(f"From, the address the message comes from [{now.sender or user}]: ").strip() or now.sender or user
-    save_user_variable(HOST_VAR, host)
-    save_user_variable(PORT_VAR, str(port))
-    save_user_variable(SECURITY_VAR, security)
-    save_user_variable(USER_VAR, user or None)
-    save_user_variable(FROM_VAR, sender or None)
+    scope = _scope(args)
+    if scope is not None and scope.path is not None:  # the login's own file holds its mail server
+        from dataclasses import replace
+
+        mail = {**scope.mail, "host": host, "port": str(port), "security": security, "user": user, "from": sender}
+        scope = replace(scope, mail={k: v for k, v in mail.items() if v})
+        scope.write(scope.path)
+        print(f"kept in {scope.path} under [mail]")
+    else:
+        save_user_variable(HOST_VAR, host)
+        save_user_variable(PORT_VAR, str(port))
+        save_user_variable(SECURITY_VAR, security)
+        save_user_variable(USER_VAR, user or None)
+        save_user_variable(FROM_VAR, sender or None)
     if password:
         secrets.put(PASSWORD_VAR, password)
         save_user_variable(PASSWORD_VAR, None)  # never in the registry in the clear
     elif not user:
         secrets.remove(PASSWORD_VAR)
-    s = MailSettings.from_env()
+    s = MailSettings.from_env(cfg=scope.mail_variables() if scope is not None else None)
     d = s.describe()
     print(f"kept: {d['host']}:{d['port']} {d['security']}, user {d['user'] or '(none)'}, from {d['sender'] or '(none)'}, "
           f"password {'in Windows Credential Manager' if s.password else '(none)'}")
@@ -224,6 +249,38 @@ def mail_dkim(args) -> int:
     return 1
 
 
+def cmd_init(args) -> int:
+    """`init SCOPE [--title T] [--serves a,b] [--port P] [--members any] [--cfg PATH] [--force]`: the login's file,
+    liminal-login.cfg (the user, 2026-11-06: "have like a setup.cfg for the login, and then like other web
+    apps use that cfg file to decide the domain/scope of the login"). SCOPE is file:///a/project/folder (a
+    local login: no email, no sign-up) or https://a.domain (the domain's users, their codes through its
+    mail record's server or the one named in [mail])."""
+    from dataclasses import replace
+
+    url = args.scope_url.strip()
+    if "://" not in url and not url.lower().startswith("file:"):
+        url = Path(url).expanduser().resolve().as_uri() if Path(url).expanduser().is_dir() else f"https://{url}"
+    try:
+        scope = Scope.parse(f"[login]\nscope = {url}\nmembers = {(args.members or 'domain').strip().lower()}\n")
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    serves = tuple(s.strip().lower() for s in (args.serves or "charts").replace(";", ",").split(",") if s.strip()) or ("charts",)
+    scope = replace(scope, title=(args.title or "").strip(), serves=serves, port=args.port)
+    path = Path(args.cfg) if args.cfg else ((scope.root if scope.kind == "local" else (layout.home() or login_dir())) / FILE_NAME)
+    if path.exists() and not args.force:
+        print(f"{path} is there already; --force replaces it", file=sys.stderr)
+        return 1
+    scope.write(path)
+    print(f"{path}:\n{scope.text()}")
+    if scope.kind == "domain":
+        print(f"The users of {scope.domain} sign up with a code sent through "
+              + (scope.mail.get("host") or "the domain's own mail record (MX); name a server under [mail] if it has none") + ".")
+    else:
+        print(f"A local login for {scope.root}: no email; the first user is made on the page or with `liminal-login user add NAME`.")
+    return 0
+
+
 def cmd_mail(args) -> int:
     """`mail setup [ADDRESS]` keeps the account; `mail test ADDRESS` sends one message through it, so you see
     it arrive and read the server's answer; `mail dkim init|check|show`: the signing key for your domain."""
@@ -255,6 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="liminal-login", description="The Liminal login app: the users and their keys and accounts.")
     p.add_argument("--version", action="version", version=f"liminal-login {__version__}")
     p.add_argument("--dir", help="the folder of the namespaces (LIMINAL_LOGIN_DIR; store/data/login by default)")
+    p.add_argument("--cfg", default=None, help=f"the login's file, {FILE_NAME} (LIMINAL_LOGIN_CFG; else the one found: the workspace's, the working folder's)")
     p.add_argument("--for", dest="for_", default=None,
                    help="the app this login serves, its users' namespace: charts (the default) or integrator (LIMINAL_LOGIN_FOR)")
     sub = p.add_subparsers(dest="command")
@@ -264,7 +322,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--until-quiet", action="store_true",
                    help=f"end once no page has been in touch for LIMINAL_QUIET_SECONDS ({QUIET_SECONDS:g}): what another app's front starts")
     s.set_defaults(func=cmd_serve)
-    st = sub.add_parser("status", help="the users here, whether the page answers, the mail account")
+    i = sub.add_parser("init", help=f"write {FILE_NAME}: SCOPE is file:///a/project/folder (local) or https://a.domain (the domain's users)")
+    i.add_argument("scope_url")
+    i.add_argument("--title", default=None)
+    i.add_argument("--serves", default=None, help="the apps this login serves: charts, integrator (charts)")
+    i.add_argument("--port", type=int, default=None)
+    i.add_argument("--members", default=None, help="a domain's login: domain (addresses at the domain only) or any")
+    i.add_argument("--cfg", default=None, help="where to write it (the folder itself for file:, the workspace for a domain)")
+    i.add_argument("--force", action="store_true", help="replace a file that is there")
+    i.set_defaults(func=cmd_init)
+    st = sub.add_parser("status", help="the users here, whether the page answers, the mail account, what the login is tied to")
     st.add_argument("--port", type=int, default=None)
     st.set_defaults(func=cmd_status)
     u = sub.add_parser("user", help="the users: add NAME [--email ADDRESS] (the password typed hidden), list")
@@ -285,10 +352,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
-    commands = ("serve", "status", "user", "mail")
+    commands = ("serve", "status", "user", "mail", "init")
     if not any(a in commands for a in argv) and not any(a in ("-h", "--help", "--version") for a in argv):
         i = 0  # `liminal-login [--for X] [--dir Y] [serve's options]`: serve, after the options every command takes
-        while i < len(argv) and argv[i] in ("--dir", "--for"):
+        while i < len(argv) and argv[i] in ("--dir", "--for", "--cfg"):
             i += 2
         argv = [*argv[:i], "serve", *argv[i:]]
     args = build_parser().parse_args(argv)

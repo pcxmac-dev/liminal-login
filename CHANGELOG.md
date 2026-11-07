@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 (2026-11-06)
+
+What a login is tied to (the user: "have like a setup.cfg for the login, and then like other web apps use
+that cfg file to decide the domain/scope of the login"; "login apps tied to domains (with email server) or
+local (file://project/folder)"; "only allow signup if the login app is tied to an smtp server"):
+`liminal-login.cfg` (liminal-libs 1.16.0 `apps.scope`), written by `liminal-login init SCOPE`, named by
+`--cfg` or LIMINAL_LOGIN_CFG, else found. A local login (`file:///...`) takes no sign-up; a domain's
+(`https://domain`) takes sign-ups for addresses at the domain (`members = any` for all) only with an email
+server, the one its mail record names or the one under `[mail]`, which `mail setup` now writes there. The
+status and the page say what the login is tied to and why a sign-up is off; the users' folder follows the
+scope (a domain's under `login/<domain>/`); the file's port counts. The library at 1.16.0 or later.
+
 ## 0.8.0 (2026-11-06)
 
 The app as the mail server of your own domain (the user: "it looks like i need a domain/email server for
