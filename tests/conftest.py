@@ -30,9 +30,9 @@ class FakeMailer(Mailer):
         self.sent.append((to, subject, text))
 
     def last_code(self) -> str:
-        """The passkey in the last message (the line of its own, after the empty line)."""
+        """The six-digit code in the last message (the line of its own)."""
         text = self.sent[-1][2]
-        return next(line.strip() for line in text.splitlines() if line.strip() and "-" in line and len(line.strip()) == 9)
+        return next(line.strip() for line in text.splitlines() if line.strip().isdigit() and len(line.strip()) == 6)
 
 
 def _port(url: str) -> int:
@@ -42,16 +42,15 @@ def _port(url: str) -> int:
 @pytest.fixture
 def folder(tmp_path, monkeypatch):
     monkeypatch.setenv("LIMINAL_LOGIN_DIR", str(tmp_path / "login"))
-    monkeypatch.delenv("LIMINAL_LOGIN_PORT", raising=False)
-    monkeypatch.delenv("LIMINAL_LOGIN_SESSION_MINUTES", raising=False)
-    for name in ("LIMINAL_SMTP_HOST", "LIMINAL_SMTP_USER", "LIMINAL_SMTP_PASSWORD", "LIMINAL_SMTP_FROM"):
+    for name in ("LIMINAL_LOGIN_PORT", "LIMINAL_LOGIN_SESSION_MINUTES", "LIMINAL_LOGIN_FOR",
+                 "LIMINAL_SMTP_HOST", "LIMINAL_SMTP_USER", "LIMINAL_SMTP_PASSWORD", "LIMINAL_SMTP_FROM"):
         monkeypatch.delenv(name, raising=False)
     return tmp_path / "login"
 
 
 @pytest.fixture
 def served(folder):
-    """The app without a mail account (the first user made on the page, as 0.1.0 did)."""
+    """The app for charts without a mail account (the first user made on the page, as 0.1.0 did)."""
     lines: list[str] = []
     app = LoginApp(folder, log=lines.append, failure_delay=0, mailer=FakeMailer(configured=False))
     url = app.start(0)
@@ -61,7 +60,7 @@ def served(folder):
 
 @pytest.fixture
 def served_mail(folder):
-    """The app with a mail account: accounts are made with a passkey."""
+    """The app for charts with a mail account: accounts are made with a code."""
     lines: list[str] = []
     mailer = FakeMailer(configured=True)
     app = LoginApp(folder, log=lines.append, failure_delay=0, mailer=mailer)

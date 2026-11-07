@@ -20,10 +20,14 @@ liminal-login user list
 liminal-login status
 ```
 
-The first visit of the page offers to create the first account: a passkey goes to your email (when a mail
-account is set, below), or the first user is made on the page without one. Later accounts come from
-"Create an account" on the sign-in page, each with its passkey; `user add` makes one from the command
-line without. The users' file and the stores live in
+Signing up is three steps: your email (a six-digit code goes to it, when a mail account is set, below),
+the code, then your account name and password. The first visit offers it; later accounts come from
+"Sign up" on the sign-in page; `user add` makes one from the command line without a code, and without a
+mail account the first user is made on the page without one.
+
+Each login instance serves one app, its users' namespace: `liminal-login --for charts` (the default,
+port 8795) or `--for integrator` (port 8796; LIMINAL_LOGIN_FOR), each with its own users' file, stores and
+cookie under `store/data/login/<for>/`. The users' file and the stores live in
 `store/data/login/` of the Liminal workspace (`liminal_libs.layout.data_dir()`), or wherever
 `LIMINAL_LOGIN_DIR` says; never in this repository.
 
@@ -55,14 +59,14 @@ Set one SMTP account of yours in your user environment variables (never in a fil
 | `LIMINAL_SMTP_FROM` | `Liminal <you@gmail.com>` | `Liminal <you@proton.me>` |
 
 Then `liminal-login mail test you@example.com` sends one message through it, and `liminal-login status`
-says which account is set. A passkey is eight letters and digits in two groups, kept only as a salted
-hash; it is good for fifteen minutes and five tries, and a new one can be asked for after a minute.
+says which account is set. A code is six digits, kept only as a salted hash; it is good for fifteen
+minutes and five tries, and a new one can be asked for after a minute.
 
 ## The API
 
 Only from this machine, only from the app's own pages or a program here (every write carries the
 apps' header). `GET /api/status`, `POST /api/users`, `POST /api/sign-in`, `POST /api/sign-out`,
-`POST /api/signup`, `POST /api/signup/resend`, `POST /api/signup/confirm`,
+`POST /api/signup`, `POST /api/signup/resend`, `POST /api/signup/verify`, `POST /api/signup/complete`,
 `GET /api/me`, `PUT /api/me/password`, `GET /api/pairs`, `GET|PUT|DELETE /api/pairs/<name>`,
 `GET /api/tray`, `GET /api/app`.
 

@@ -1,9 +1,11 @@
-"""`liminal-login`: the login app's command line. `serve` keeps its page at its port (8795,
-LIMINAL_LOGIN_PORT) until Ctrl+C; `user add NAME [--email ADDRESS]` makes a user (the password typed
-hidden, twice; never on the command line; no passkey: the machine's owner adding one); `user list`
+"""`liminal-login`: the login app's command line. Every command takes `--for charts|integrator`, the
+app this login serves (LIMINAL_LOGIN_FOR; charts by default): its users live in that namespace's folder,
+with their own cookie and default port (charts 8795, integrator 8796). `serve` keeps the page at its
+port (LIMINAL_LOGIN_PORT) until Ctrl+C; `user add NAME [--email ADDRESS]` makes a user (the password
+typed hidden, twice; never on the command line; no code: the machine's owner adding one); `user list`
 names them; `status` says what is there; `mail test ADDRESS` sends a test message through the mail
-account in your environment (LIMINAL_SMTP_*: liminal_libs.mail). The folder of the users' file and the
-stores is LIMINAL_LOGIN_DIR, else store/data/login (liminal_libs.layout)."""
+account in your environment (LIMINAL_SMTP_*: liminal_libs.mail). The folder of the namespaces is
+LIMINAL_LOGIN_DIR, else store/data/login (liminal_libs.layout)."""
 from __future__ import annotations
 
 import argparse
@@ -17,15 +19,24 @@ from liminal_libs.logs import Logger
 from liminal_libs.mail import MailError, Mailer, MailSettings
 
 from . import __version__
-from .app import LoginApp, login_dir
+from .app import LoginApp, login_dir, namespace_of
 from .users import UserStore
 
 
 QUIET_SECONDS = 600.0  # `serve --until-quiet`: the server ends after this long without a request (LIMINAL_QUIET_SECONDS)
 
 
-def _dir(args) -> Path:
+def _root(args) -> Path:
     return Path(args.dir) if getattr(args, "dir", None) else login_dir()
+
+
+def _namespace(args) -> str:
+    return namespace_of(getattr(args, "for_", None))
+
+
+def _dir(args) -> Path:
+    """The namespace's folder: the users' file and the stores of the app this login serves."""
+    return _root(args) / _namespace(args)
 
 
 def _log(folder: Path) -> Logger:
@@ -34,10 +45,10 @@ def _log(folder: Path) -> Logger:
 
 def cmd_serve(args) -> int:
     folder = _dir(args)
-    app = LoginApp(folder, log=_log(folder))
+    app = LoginApp(_root(args), log=_log(folder), namespace=_namespace(args))
     port = args.port if args.port is not None else app.port()
     mail = app.mailer.settings
-    print(f"login app: its page at {app.url(port)} (the folder {folder}; "
+    print(f"login app for {app.title_for}: its page at {app.url(port)} (the folder {folder}; "
           f"{'passkeys through ' + mail.host if mail.configured else 'no mail account set (LIMINAL_SMTP_*): no passkeys'}; "
           "Ctrl+C to stop)", flush=True)
     quiet = float(os.environ.get("LIMINAL_QUIET_SECONDS") or QUIET_SECONDS) if args.until_quiet else None
@@ -55,9 +66,9 @@ def cmd_status(args) -> int:
         names = users.names()
     finally:
         users.close()
-    port = LoginApp().port() if not args.port else args.port
+    port = LoginApp(_root(args), log=lambda m: None, namespace=_namespace(args)).port() if not args.port else args.port
     mail = MailSettings.from_env()
-    print(f"login app: {len(names)} user(s) in {folder / 'users.db'}; "
+    print(f"login app for {_namespace(args)}: {len(names)} user(s) in {folder / 'users.db'}; "
           f"{'answering' if web.listening(port) else 'not running'} at port {port}; "
           f"mail {'through ' + mail.host + ' as ' + (mail.user or mail.sender) if mail.configured else 'not set up (' + '; '.join(mail.problems()) + ')'}")
     for u in names:
@@ -119,7 +130,9 @@ def cmd_mail(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="liminal-login", description="The Liminal login app: the users and their keys and accounts.")
     p.add_argument("--version", action="version", version=f"liminal-login {__version__}")
-    p.add_argument("--dir", help="the folder of the users' file and the stores (LIMINAL_LOGIN_DIR; store/data/login by default)")
+    p.add_argument("--dir", help="the folder of the namespaces (LIMINAL_LOGIN_DIR; store/data/login by default)")
+    p.add_argument("--for", dest="for_", default=None,
+                   help="the app this login serves, its users' namespace: charts (the default) or integrator (LIMINAL_LOGIN_FOR)")
     sub = p.add_subparsers(dest="command")
     s = sub.add_parser("serve", help="keep the login's page at its port until Ctrl+C")
     s.add_argument("--port", type=int, default=None, help="the page's port (LIMINAL_LOGIN_PORT, 8795)")
@@ -144,8 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
-    if not argv or argv[0].startswith("-") and argv[0] not in ("-h", "--help", "--version"):
-        argv = ["serve", *argv]
+    commands = ("serve", "status", "user", "mail")
+    if not any(a in commands for a in argv) and not any(a in ("-h", "--help", "--version") for a in argv):
+        i = 0  # `liminal-login [--for X] [--dir Y] [serve's options]`: serve, after the options every command takes
+        while i < len(argv) and argv[i] in ("--dir", "--for"):
+            i += 2
+        argv = [*argv[:i], "serve", *argv[i:]]
     args = build_parser().parse_args(argv)
     if not getattr(args, "func", None):
         build_parser().print_help()

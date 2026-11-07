@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 (2026-11-06)
+
+The sign-up in the user's order ("sign up lets you put in an email and sends an email to an email account,
+which you then enter the 4-6 digit code back in to the signup prompt to generate a new user, password,
+etcc"; "the user then has the ability to create an account name, and password"), and one login per
+app ("each login-app instance is either tied to the chart app or the integrator app ... the context/name
+space under which the user exists is either for the integrator or the chart app").
+
+- A sign-up is the email first (`POST /api/signup {email}`: a six-digit code goes out), the code
+  (`POST /api/signup/verify {email, code}`: the proof for the last step), then the account name and the
+  password (`POST /api/signup/complete {email, token, name, password}`: the account made, verified,
+  signed in). `/api/signup/confirm` and the eight-character passkey are gone; the page's three steps.
+- `--for charts|integrator` (LIMINAL_LOGIN_FOR; charts by default): the app this instance serves. Its
+  users live in that namespace's folder (`store/data/login/<for>/`), its cookie is `liminal_login_<for>`
+  (cookies ignore ports) and its default port 8795 for charts, 8796 for the integrator; the page and the
+  codes say which app ("Your Liminal Charts code"); `/api/status`, `/api/me` and `/api/app` carry `for`.
+- The page tells the page holding it (the charts app's) when you sign in or out (postMessage).
+
 ## 0.2.1 (2026-11-06)
 
 Bound into the charts app: `serve --until-quiet` ends the server once no page has been in touch for

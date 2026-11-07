@@ -21,12 +21,16 @@ def test_a_user_is_added_with_the_password_typed_hidden(folder, monkeypatch, cap
     assert cli.main(["user", "add", "Bob"]) == 1
     assert cli.main(["user", "add"]) == 2
     assert cli.main(["user", "list"]) == 0 and "Ada: created" in capsys.readouterr().out
-    users = UserStore(folder / "users.db")
+    users = UserStore(folder / "charts" / "users.db")  # the charts namespace, the default
     assert users.verify("Ada", "correct horse battery") is not None and users.count() == 1
     users.close()
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "1 user(s)" in out and "not running at port 8795" in out
+    assert "login app for charts: 1 user(s)" in out and "not running at port 8795" in out
+    # the integrator's namespace: its own users, cookie and port
+    assert cli.main(["--for", "integrator", "user", "list"]) == 0 and "no users yet" in capsys.readouterr().out
+    assert cli.main(["--for", "integrator", "status"]) == 0 and "port 8796" in capsys.readouterr().out
+    assert (folder / "charts" / "users.db").is_file() and (folder / "integrator" / "users.db").is_file()
 
 
 def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, monkeypatch, capsys):
@@ -59,9 +63,13 @@ def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):
     ran: list = []
     monkeypatch.setattr(LoginApp, "serve", lambda self, port=None, open_browser=False, stop=None, until_quiet=None:
                         ran.append((self.dir, port, open_browser, until_quiet)) or "url")
-    assert cli.main(["serve", "--no-browser", "--port", "8796"]) == 0 and ran == [(folder, 8796, False, None)]
-    assert cli.main(["--no-browser"]) == 0 and ran[-1] == (folder, 8795, False, None)  # `liminal-login` alone serves
-    assert cli.main([]) == 0 and ran[-1] == (folder, 8795, True, None)
+    assert cli.main(["serve", "--no-browser", "--port", "8796"]) == 0 and ran == [(folder / "charts", 8796, False, None)]
+    assert cli.main(["--no-browser"]) == 0 and ran[-1] == (folder / "charts", 8795, False, None)  # `liminal-login` alone serves
+    assert cli.main([]) == 0 and ran[-1] == (folder / "charts", 8795, True, None)
+    assert cli.main(["--for", "integrator", "serve", "--no-browser"]) == 0 and ran[-1] == (folder / "integrator", 8796, False, None)
+    monkeypatch.setenv("LIMINAL_LOGIN_FOR", "integrator")
+    assert cli.main(["serve", "--no-browser"]) == 0 and ran[-1][0] == folder / "integrator"
+    monkeypatch.delenv("LIMINAL_LOGIN_FOR")
     monkeypatch.setenv("LIMINAL_LOGIN_PORT", "8801")
     assert cli.main(["serve", "--no-browser"]) == 0 and ran[-1][1] == 8801
     # started by another app's front: until quiet, LIMINAL_QUIET_SECONDS

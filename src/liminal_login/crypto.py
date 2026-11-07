@@ -26,8 +26,7 @@ SALT_BYTES = 16
 KEY_BYTES = 32
 NONCE_BYTES = 12
 VERIFIER_TAG = b"liminal-login verifier:"
-CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I: read from a phone, typed on a keyboard
-CODE_LENGTH = 8
+CODE_DIGITS = 6  # the code mailed at sign-up (the user: "the 4-6 digit code"); five tries, fifteen minutes
 
 
 class Locked(Exception):
@@ -79,21 +78,27 @@ def unseal(key: bytes, nonce: bytes, sealed: bytes, aad: bytes) -> bytes:
         raise Locked("the key does not open it") from None
 
 
-# -- passkeys --------------------------------------------------------------------------------------
+# -- the codes mailed at sign-up -------------------------------------------------------------------
 
 def new_code() -> str:
-    """A passkey to mail: XXXX-XXXX from CODE_ALPHABET (40 bits; five tries, fifteen minutes)."""
-    raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
-    return f"{raw[:4]}-{raw[4:]}"
+    """The code to mail: six digits (a million; five tries, fifteen minutes)."""
+    return "".join(secrets.choice("0123456789") for _ in range(CODE_DIGITS))
 
 
 def normal_code(code) -> str:
-    """A typed passkey as compared: upper case, the dash and spaces dropped, a 0 read as O and a 1
-    as I (neither is in the alphabet)."""
-    text = "".join(ch for ch in str(code or "").upper() if ch.isalnum())
-    return text.translate(str.maketrans({"0": "O", "1": "I"}))[:CODE_LENGTH]
+    """A typed code as compared: its digits alone (spaces and dashes dropped)."""
+    return "".join(ch for ch in str(code or "") if ch.isdigit())[:CODE_DIGITS]
 
 
 def code_hash(code: str, salt: bytes) -> bytes:
-    """A passkey as kept: a salted hash (a passkey has entropy enough for five tries, no KDF needed)."""
-    return hashlib.sha256(salt + b"liminal-login passkey:" + normal_code(code).encode("ascii")).digest()
+    """A code as kept: a salted hash (never the code)."""
+    return hashlib.sha256(salt + b"liminal-login code:" + normal_code(code).encode("ascii")).digest()
+
+
+def new_token() -> str:
+    """What proves a code was typed right, for the step that makes the account (never kept in the clear)."""
+    return secrets.token_urlsafe(24)
+
+
+def token_hash(token: str) -> bytes:
+    return hashlib.sha256(b"liminal-login signup token:" + str(token or "").encode("utf-8")).digest()

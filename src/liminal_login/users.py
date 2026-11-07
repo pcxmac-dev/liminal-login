@@ -1,12 +1,13 @@
 """The users (the user, 2026-11-04: "username and password are the first things that identify" a
-user; "the login app is going to need a database for storing user/passwords/account info"; "i need a
-way to create a user and send an email out ... in order to obtain a passkey to create the account"):
-a SQLite file of users, each with the salt and parameters of their unlock key, the verifier of their
-password, their vault key wrapped under the unlock key (crypto.py), their email and when it was
-verified; and the sign-ups waiting for their passkey (the same material, made when the account was
-asked for, so the password is typed once; the passkey kept as a salted hash, with its expiry and the
-tries made). Nothing in the file opens a vault without the password. The pairs themselves are each
-user's own store (vault.py)."""
+user; "the login app is going to need a database for storing user/passwords/account info"; 2026-11-06:
+"sign up lets you put in an email and sends an email to an email account, which you then enter the
+4-6 digit code back in to the signup prompt to generate a new user, password, etcc"): a SQLite file of
+users, each with the salt and parameters of their unlock key, the verifier of their password, their
+vault key wrapped under the unlock key (crypto.py), their email and when it was verified; and the
+sign-ups under way: an email, the code mailed to it (kept as a salted hash, with its expiry and the
+tries made) and, once the code came back right, the proof of that for the step that chooses the
+name and the password. Nothing in the file opens a vault without the password. The pairs themselves
+are each user's own store (vault.py)."""
 from __future__ import annotations
 
 import json
@@ -25,9 +26,10 @@ PASSWORD_MAX = 512
 EMAIL_MAX = 254
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-CODE_MINUTES = 15.0  # a passkey's life
-CODE_TRIES = 5  # wrong passkeys before the sign-up is dropped
-RESEND_SECONDS = 60.0  # no new passkey sooner than this
+CODE_MINUTES = 15.0  # a code's life
+CODE_TRIES = 5  # wrong codes before the sign-up is dropped
+RESEND_SECONDS = 60.0  # no new code sooner than this
+COMPLETE_MINUTES = 30.0  # after the code came back right: this long to choose the name and the password
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -39,19 +41,19 @@ CREATE TABLE IF NOT EXISTS users (
     vault_wrapped BLOB NOT NULL,    -- the vault key, sealed under the unlock key
     created_at TEXT NOT NULL,
     seen_at TEXT,                   -- the last sign-in
-    email TEXT COLLATE NOCASE,      -- the address the account was made with (1.0: none)
-    verified_at TEXT                -- when its passkey came back
+    email TEXT COLLATE NOCASE,      -- the address the account was made with (0.1.0: none)
+    verified_at TEXT                -- when its code came back
 );
 CREATE TABLE IF NOT EXISTS signups (
     email TEXT PRIMARY KEY COLLATE NOCASE,
-    name TEXT NOT NULL,
-    salt BLOB NOT NULL, kdf TEXT NOT NULL, verifier BLOB NOT NULL, vault_nonce BLOB NOT NULL, vault_wrapped BLOB NOT NULL,
     code_salt BLOB NOT NULL,
-    code_hash BLOB NOT NULL,        -- the passkey mailed, as a salted hash
+    code_hash BLOB NOT NULL,        -- the code mailed, as a salted hash
     tries INTEGER NOT NULL DEFAULT 0,
     sent_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    verified_at TEXT,               -- when the code came back right
+    token_hash BLOB                 -- the proof given then, for the step that makes the account
 );
 """
 ADDED_COLUMNS = (("email", "TEXT COLLATE NOCASE"), ("verified_at", "TEXT"))  # 0.2.0, on a 0.1.0 file
@@ -143,6 +145,10 @@ class UserStore:
             for column, kind in ADDED_COLUMNS:
                 if column not in have:
                     self._con.execute(f"ALTER TABLE users ADD COLUMN {column} {kind}")
+            have = {r["name"] for r in self._con.execute("PRAGMA table_info(signups)")}
+            if "token_hash" not in have:  # a 0.2.0 file: its sign-ups under way are dropped
+                self._con.execute("DROP TABLE signups")
+                self._con.executescript(SCHEMA)
             self._con.commit()
 
     def close(self) -> None:
@@ -174,26 +180,33 @@ class UserStore:
         with self._lock:
             return self._con.execute(f"SELECT * FROM users WHERE {column} = ?", (who,)).fetchone()
 
-    def create(self, name, password, email=None) -> User:
-        """A new user without a passkey (the command line, a signed-in user adding one): a salt, the
-        unlock key from the password, a vault key wrapped under it; the email, if given, unverified."""
-        name, password = clean_name(name), check_password(password)
-        email = clean_email(email) if email else None
-        salt, kdf, verifier, nonce, wrapped, unlock, vault_key = _material(name, password)
-        created = now_iso()
-        with self._lock:
-            self._refuse_taken(name, email)
-            self._con.execute("INSERT INTO users (name, salt, kdf, verifier, vault_nonce, vault_wrapped, created_at, email) "
-                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (name, salt, json.dumps(kdf), verifier, nonce, wrapped, created, email))
-            self._con.commit()
-        return User(name, created, None, kdf, salt, unlock, vault_key, email)
-
-    def _refuse_taken(self, name: str, email: str | None, pending_ok: str | None = None) -> None:
+    def _refuse_taken(self, name: str | None, email: str | None) -> None:
         """Under the lock: ValueError when the name or the email is a user's already."""
-        if self._con.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone():
+        if name and self._con.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone():
             raise ValueError(f"there is a user named {name!r} already")
         if email and self._con.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
             raise ValueError("there is a user with that email address already: sign in instead")
+
+    def _insert(self, name: str, email: str | None, verified_at: str | None, material: tuple, seen: str | None = None) -> str:
+        """Under the lock: the user's row from the password's material; returns created_at."""
+        salt, kdf, verifier, nonce, wrapped, _, _ = material
+        created = now_iso()
+        self._con.execute("INSERT INTO users (name, salt, kdf, verifier, vault_nonce, vault_wrapped, created_at, seen_at, "
+                          "email, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                          (name, salt, json.dumps(kdf), verifier, nonce, wrapped, created, seen, email, verified_at))
+        return created
+
+    def create(self, name, password, email=None) -> User:
+        """A new user without a code (the command line, a signed-in user adding one): a salt, the
+        unlock key from the password, a vault key wrapped under it; the email, if given, unverified."""
+        name, password = clean_name(name), check_password(password)
+        email = clean_email(email) if email else None
+        material = _material(name, password)
+        with self._lock:
+            self._refuse_taken(name, email)
+            created = self._insert(name, email, None, material)
+            self._con.commit()
+        return User(name, created, None, material[1], material[0], material[5], material[6], email)
 
     def verify(self, who, password) -> User | None:
         """The user when the name (or email) and password are theirs (their sign-in noted), else None.
@@ -248,83 +261,99 @@ class UserStore:
         return User(new_name, user.created_at, user.seen_at, user.kdf, user.salt, user.unlock_key, user.vault_key,
                     user.email, user.verified_at)
 
-    # -- the sign-ups: an account asked for, waiting for its passkey ---------------------------------
-    def start_signup(self, name, email, password, minutes: float = CODE_MINUTES) -> str:
-        """An account asked for: the row that will be the user's, kept aside until the passkey
-        returned here is typed on the page; returns the passkey to mail (never kept in the clear).
-        A sign-up for the same email asked again replaces the one waiting."""
-        name, email, password = clean_name(name), clean_email(email), check_password(password)
-        salt, kdf, verifier, nonce, wrapped, _, _ = _material(name, password)
+    # -- the sign-ups: an email, its code, then the name and the password --------------------------
+    def start_signup(self, email, minutes: float = CODE_MINUTES) -> str:
+        """A sign-up begun with an email: the code to mail (kept as a salted hash alone). An address
+        that is a user's already is refused; a sign-up begun again replaces the one under way."""
+        email = clean_email(email)
         code = crypto.new_code()
         code_salt = crypto.new_salt()
         now = now_iso()
         with self._lock:
-            self._refuse_taken(name, email)
-            self._con.execute("INSERT OR REPLACE INTO signups (email, name, salt, kdf, verifier, vault_nonce, vault_wrapped, "
-                              "code_salt, code_hash, tries, sent_at, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
-                              (email, name, salt, json.dumps(kdf), verifier, nonce, wrapped, code_salt,
-                               crypto.code_hash(code, code_salt), now, _at(minutes), now))
+            self._refuse_taken(None, email)
+            self._con.execute("INSERT OR REPLACE INTO signups (email, code_salt, code_hash, tries, sent_at, expires_at, created_at) "
+                              "VALUES (?, ?, ?, 0, ?, ?, ?)", (email, code_salt, crypto.code_hash(code, code_salt), now, _at(minutes), now))
             self._con.commit()
         return code
 
     def signup(self, email) -> dict | None:
-        """The sign-up waiting for `email`: its name, when the passkey was sent and expires, the
-        tries made; None when there is none."""
+        """The sign-up under way for `email`: when its code was sent and expires, the tries made,
+        whether the code came back right; None when there is none."""
         try:
             email = clean_email(email)
         except ValueError:
             return None
         with self._lock:
-            r = self._con.execute("SELECT name, tries, sent_at, expires_at FROM signups WHERE email = ?", (email,)).fetchone()
-        return None if r is None else {"email": email, "name": r["name"], "tries": r["tries"], "sentAt": r["sent_at"],
-                                       "expiresAt": r["expires_at"]}
+            r = self._con.execute("SELECT tries, sent_at, expires_at, verified_at FROM signups WHERE email = ?", (email,)).fetchone()
+        return None if r is None else {"email": email, "tries": r["tries"], "sentAt": r["sent_at"], "expiresAt": r["expires_at"],
+                                       "verified": r["verified_at"] is not None}
 
     def resend_signup(self, email, minutes: float = CODE_MINUTES, sooner_than: float = RESEND_SECONDS) -> str:
-        """A new passkey for the sign-up waiting (the old one no longer counts); ValueError when none
-        waits or the last went out less than `sooner_than` seconds ago."""
+        """A new code for the sign-up under way (the old one no longer counts); ValueError when none
+        is under way or the last went out less than `sooner_than` seconds ago."""
         email = clean_email(email)
         with self._lock:
             r = self._con.execute("SELECT sent_at FROM signups WHERE email = ?", (email,)).fetchone()
             if r is None:
-                raise ValueError("no account is waiting for a passkey at that address: ask for one first")
+                raise ValueError("no sign-up is under way for that address: start one first")
             sent = datetime.fromisoformat(r["sent_at"])
             if (datetime.now(timezone.utc) - sent).total_seconds() < sooner_than:
-                raise ValueError(f"a passkey went out less than {int(sooner_than)} seconds ago: look for it, then ask again")
+                raise ValueError(f"a code went out less than {int(sooner_than)} seconds ago: look for it, then ask again")
             code = crypto.new_code()
             code_salt = crypto.new_salt()
-            self._con.execute("UPDATE signups SET code_salt = ?, code_hash = ?, tries = 0, sent_at = ?, expires_at = ? WHERE email = ?",
+            self._con.execute("UPDATE signups SET code_salt = ?, code_hash = ?, tries = 0, sent_at = ?, expires_at = ?, "
+                              "verified_at = NULL, token_hash = NULL WHERE email = ?",
                               (code_salt, crypto.code_hash(code, code_salt), now_iso(), _at(minutes), email))
             self._con.commit()
         return code
 
-    def confirm_signup(self, email, code) -> dict:
-        """The passkey typed: right, the user is made (their email verified) and returned as the page
-        sees them (the keys open with the password at sign-in: `verify`); wrong, a try is spent
-        (ValueError), and after CODE_TRIES or past the expiry the sign-up is dropped (ValueError says
-        to ask again)."""
+    def verify_signup(self, email, code) -> str:
+        """The code typed: right, the address is verified and the proof for the next step is
+        returned; wrong, a try is spent (ValueError), and after CODE_TRIES or past the expiry the
+        sign-up is dropped (ValueError says to start again)."""
         email = clean_email(email)
         with self._lock:
             r = self._con.execute("SELECT * FROM signups WHERE email = ?", (email,)).fetchone()
             if r is None:
-                raise ValueError("no account is waiting for a passkey at that address: ask for one first")
+                raise ValueError("no sign-up is under way for that address: start one first")
             if datetime.fromisoformat(r["expires_at"]) < datetime.now(timezone.utc):
                 self._con.execute("DELETE FROM signups WHERE email = ?", (email,))
                 self._con.commit()
-                raise ValueError("that passkey has expired: ask for a new one")
+                raise ValueError("that code has expired: ask for a new one")
             if not crypto.same(crypto.code_hash(code, r["code_salt"]), r["code_hash"]):
                 tries = r["tries"] + 1
                 if tries >= CODE_TRIES:
                     self._con.execute("DELETE FROM signups WHERE email = ?", (email,))
                     self._con.commit()
-                    raise ValueError("that was the last try for that passkey: ask for a new one")
+                    raise ValueError("that was the last try for that code: ask for a new one")
                 self._con.execute("UPDATE signups SET tries = ? WHERE email = ?", (tries, email))
                 self._con.commit()
-                raise ValueError(f"wrong passkey ({CODE_TRIES - tries} tries left)")
-            self._refuse_taken(r["name"], email)
-            now = now_iso()
-            self._con.execute("INSERT INTO users (name, salt, kdf, verifier, vault_nonce, vault_wrapped, created_at, seen_at, email, verified_at) "
-                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                              (r["name"], r["salt"], r["kdf"], r["verifier"], r["vault_nonce"], r["vault_wrapped"], now, now, email, now))
+                raise ValueError(f"wrong code ({CODE_TRIES - tries} tries left)")
+            token = crypto.new_token()
+            self._con.execute("UPDATE signups SET verified_at = ?, token_hash = ?, expires_at = ? WHERE email = ?",
+                              (now_iso(), crypto.token_hash(token), _at(COMPLETE_MINUTES), email))
+            self._con.commit()
+        return token
+
+    def complete_signup(self, email, token, name, password) -> User:
+        """The name and the password chosen once the code came back right (`token` proves it): the
+        user is made, their email verified, and returned with their keys (signed in at once)."""
+        email = clean_email(email)
+        with self._lock:
+            r = self._con.execute("SELECT * FROM signups WHERE email = ?", (email,)).fetchone()
+            if r is None or r["verified_at"] is None or r["token_hash"] is None \
+                    or not crypto.same(crypto.token_hash(token), r["token_hash"]):
+                raise ValueError("that address has not been verified: start the sign-up again")
+            if datetime.fromisoformat(r["expires_at"]) < datetime.now(timezone.utc):
+                self._con.execute("DELETE FROM signups WHERE email = ?", (email,))
+                self._con.commit()
+                raise ValueError("the sign-up took too long: start it again")
+        name, password = clean_name(name), check_password(password)
+        material = _material(name, password)
+        now = now_iso()
+        with self._lock:
+            self._refuse_taken(name, email)
+            created = self._insert(name, email, now, material, seen=now)
             self._con.execute("DELETE FROM signups WHERE email = ?", (email,))
             self._con.commit()
-        return {"name": r["name"], "createdAt": now, "seenAt": now, "email": email, "verified": True}
+        return User(name, created, now, material[1], material[0], material[5], material[6], email, now)

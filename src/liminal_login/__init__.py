@@ -6,4 +6,4 @@ only this app opens, with a key derived from the user's password; its page at it
 one user icon (app.py, static/): sign in, sign out, who you are, your pairs and the fingerprints of
 the keys that mask them. What other programs ask of it is the library's `liminal_libs.apps.LoginClient`."""
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"

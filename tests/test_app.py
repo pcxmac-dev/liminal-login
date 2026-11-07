@@ -10,7 +10,10 @@ import pytest
 
 from liminal_libs.apps import LoginClient, LoginRefused
 from liminal_libs.web import WRITE_HEADER
-from liminal_login.app import COOKIE, LoginApp, login_dir
+from liminal_login.app import LoginApp, login_dir
+
+
+COOKIE = "liminal_login_charts"  # the charts namespace's (the tests' default)
 
 
 def _call(port, method, path, body=None, headers=None, token=None):
@@ -39,9 +42,9 @@ def test_the_page_its_icon_and_the_librarys_files(served):
     assert b"window.LiminalIcons" in _call(port, "GET", "/icons.js")[1] and b"#rail" in _call(port, "GET", "/liminal.css")[1]
     assert b"signInForm" in _call(port, "GET", "/login.js")[1] and _call(port, "GET", "/login.css")[0] == 200
     status, tray, _ = _call(port, "GET", "/api/tray")
-    assert tray == {"app": "login", "icon": "user", "title": "Login",
-                    "items": [{"id": "login", "icon": "user", "title": "Login", "kind": "app", "app": "login"}]}
-    assert _call(port, "GET", "/api/app")[1]["port"] == 8795 and app.port() == 8795
+    assert tray == {"app": "login", "icon": "user", "title": "Login: Liminal Charts",
+                    "items": [{"id": "login", "icon": "user", "title": "Login: Liminal Charts", "kind": "app", "app": "login"}]}
+    assert _call(port, "GET", "/api/app")[1]["port"] == 8795 and app.port() == 8795 and app.dir == app.root / "charts"
     assert any("login: its page at" in m for m in lines)
 
 
@@ -49,7 +52,7 @@ def test_the_first_user_is_made_from_the_page_then_signs_in_and_out(served):
     app, port, lines = served
     st = _call(port, "GET", "/api/status")[1]
     assert {k: st[k] for k in ("users", "signedIn", "name", "app")} == {"users": 0, "signedIn": False, "name": None, "app": app.describe()}
-    assert st["signup"]["email"] is False
+    assert st["signup"]["email"] is False and st["for"] == "charts" and app.describe()["for"] == "charts" and app.cookie_name == COOKIE
     assert _call(port, "GET", "/api/me")[0] == 401 and _call(port, "GET", "/api/pairs")[0] == 401
     status, data, _ = _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})
     assert status == 201 and data["name"] == "Ada" and "password" not in json.dumps(data)
