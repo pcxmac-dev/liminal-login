@@ -84,6 +84,25 @@ server's answer, shows it on the page and waits for a code only once the answer 
 says which account is set. A code is six digits, kept only as a salted hash; it is good for fifteen
 minutes and five tries, and a new one can be asked for after a minute.
 
+## Your own domain: the app as its mail server
+
+The user's words: "it looks like i need a domain/email server for this to work". The domain is yours; the
+server can be this app. It signs what it sends for the domain (DKIM, `liminal_libs.dkim`), and one DNS
+record at the domain lets any receiving server check the signature, so a message from an address at your
+domain passes the domain's own policy (DMARC) wherever it lands, home connection or not:
+
+1. `liminal-login mail setup`: `direct` at the host prompt, and a From address at your domain.
+2. `liminal-login mail dkim init`: a signing key, kept in the login folder (`dkim/<domain>.<selector>.pem`,
+   in no repository); it prints the TXT record to add, `liminal._domainkey.<domain>`, where the domain's
+   DNS records live (the registrar or DNS host, not the mailbox provider).
+3. `liminal-login mail dkim check` once the record is published; `liminal-login mail test you@...` then
+   shows the server's answer, and at the receiving end the message's own headers say `dkim=pass`.
+
+Two more records help: the domain's SPF record may name this machine's address (`ip4:...`, which changes
+with the connection), and `LIMINAL_SMTP_HELO` may be a name under your domain with an A record for this
+machine (`host.your-domain.example`). Some receivers also want a reverse name for the sending address,
+which only the connection's provider can set; a message to such a receiver goes through an account.
+
 ## The API
 
 Only from this machine, only from the app's own pages or a program here (every write carries the

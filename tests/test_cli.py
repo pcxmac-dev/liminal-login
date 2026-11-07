@@ -2,6 +2,8 @@
 `serve` with its port; no server runs here."""
 from __future__ import annotations
 
+import pytest
+
 from liminal_login import cli
 from liminal_login.app import LoginApp
 from liminal_login.users import UserStore
@@ -58,6 +60,12 @@ def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, mo
     assert "sent to ada@example.test: smtp.example.test:587 answered 250 2.0.0 OK queued as t-1 at 2026-11-06T21:00:00+00:00, message id <t-1@example.test>" in out
     assert cli.main(["mail", "test", "down@example.test"]) == 1 and "did not take" in capsys.readouterr().err
     assert cli.main(["mail", "test"]) == 2
+    # a user added from the command line may carry an email, unverified
+    typed = iter(["correct horse battery", "correct horse battery"])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": next(typed))
+    assert cli.main(["user", "add", "Ada", "--email", "ada@example.test"]) == 0
+    assert cli.main(["user", "list"]) == 0 and "ada@example.test" in capsys.readouterr().out
+    assert cli.main(["status"]) == 0 and "mail not set up" in capsys.readouterr().out
 
 
 def test_the_mail_account_is_set_up_once_from_the_command_line_with_the_password_kept_apart(monkeypatch, capsys):
@@ -90,12 +98,38 @@ def test_the_mail_account_is_set_up_once_from_the_command_line_with_the_password
     answers = iter(["smtp.example.test", "", "", "someone@example.test", ""])
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": "")
     assert cli.main(["mail", "setup"]) == 1 and "go together" in capsys.readouterr().err
-    # a user added from the command line may carry an email, unverified
-    typed = iter(["correct horse battery", "correct horse battery"])
-    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": next(typed))
-    assert cli.main(["user", "add", "Ada", "--email", "ada@example.test"]) == 0
-    assert cli.main(["user", "list"]) == 0 and "ada@example.test" in capsys.readouterr().out
-    assert cli.main(["status"]) == 0 and "mail not set up" in capsys.readouterr().out
+
+
+def test_a_signing_key_for_the_users_domain_its_record_and_whether_it_is_published(folder, monkeypatch, capsys):
+    # the user, 2026-11-06: "it looks like i need a domain/email server for this to work": the key here, the
+    # record at the domain; the app signs what it sends from the domain
+    pytest.importorskip("cryptography")
+    from liminal_libs import dkim, mail
+
+    saved: dict = {}
+    monkeypatch.setattr(cli, "save_user_variable", lambda name, value: saved.__setitem__(name, value))
+    monkeypatch.setattr(mail, "_saved", lambda: {k: v for k, v in saved.items() if v})
+    assert cli.main(["--dir", str(folder), "mail", "dkim", "init"]) == 2  # no domain known yet
+    assert "a domain is needed" in capsys.readouterr().err
+    assert cli.main(["--dir", str(folder), "mail", "dkim", "init", "--domain", "Your-Domain.example"]) == 0
+    out = capsys.readouterr().out
+    key = folder / "dkim" / "your-domain.example.liminal.pem"
+    assert key.is_file() and saved == {"LIMINAL_SMTP_DKIM_KEY": str(key), "LIMINAL_SMTP_DKIM_SELECTOR": "liminal",
+                                       "LIMINAL_SMTP_DKIM_DOMAIN": "your-domain.example"}
+    public = dkim.public_of(key.read_bytes())
+    assert "name:  liminal._domainkey.your-domain.example" in out and f"value: v=DKIM1; k=rsa; p={public}" in out
+    assert cli.main(["--dir", str(folder), "mail", "dkim", "init"]) == 1 and "there already" in capsys.readouterr().err
+    assert cli.main(["--dir", str(folder), "mail", "dkim", "show"]) == 0 and public in capsys.readouterr().out
+    assert cli.main(["--dir", str(folder), "mail", "dkim", "other"]) == 2
+    monkeypatch.setattr(dkim, "published", lambda name: None)
+    assert cli.main(["--dir", str(folder), "mail", "dkim", "check"]) == 1 and "no DKIM record found yet" in capsys.readouterr().out
+    monkeypatch.setattr(dkim, "published", lambda name: public)
+    assert cli.main(["--dir", str(folder), "mail", "dkim", "check"]) == 0 and "published and matching" in capsys.readouterr().out
+    monkeypatch.setattr(dkim, "published", lambda name: "another")
+    assert cli.main(["--dir", str(folder), "mail", "dkim", "check"]) == 1 and "not the one here" in capsys.readouterr().err
+    # the status names the signing; a mailer in direct mode signs from the domain
+    saved.update({"LIMINAL_SMTP_HOST": "direct", "LIMINAL_SMTP_FROM": "liminal@your-domain.example"})
+    assert cli.main(["--dir", str(folder), "status", "--port", "1"]) == 0 and "signed under liminal._domainkey.your-domain.example" in capsys.readouterr().out
 
 
 def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):

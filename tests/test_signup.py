@@ -139,7 +139,8 @@ def test_the_first_account_is_made_with_a_code_when_mail_is_set_up(served_mail):
     assert status == 202 and data["email"] == "a***@example.test" and data["minutes"] == 15
     # the mail server's word that it took the message, kept for the page and the status
     assert data["sent"] == {"to": "a***@example.test", "host": "smtp.example.test", "port": 587, "code": 250,
-                            "reply": "2.0.0 OK queued as fake-1", "at": "2026-11-06T21:00:00+00:00", "messageId": "<fake-1@example.test>"}
+                            "reply": "2.0.0 OK queued as fake-1", "at": "2026-11-06T21:00:00+00:00", "messageId": "<fake-1@example.test>",
+                            "signed": ""}
     assert _call(port, "GET", "/api/status")[1]["signup"]["lastSent"] == data["sent"]
     assert any("answered 250 2.0.0 OK queued as fake-1" in m for m in lines)
     to, subject, text = mailer.sent[-1]

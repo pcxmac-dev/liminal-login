@@ -71,7 +71,8 @@ def cmd_status(args) -> int:
     mail = MailSettings.from_env()
     print(f"login app for {_namespace(args)}: {len(names)} user(s) in {folder / 'users.db'}; "
           f"{'answering' if web.listening(port) else 'not running'} at port {port}; "
-          f"mail {'through ' + mail.host + ' as ' + (mail.user or mail.sender) if mail.configured else 'not set up (' + '; '.join(mail.problems()) + ')'}")
+          f"mail {'through ' + mail.host + ' as ' + (mail.user or mail.sender) if mail.configured else 'not set up (' + '; '.join(mail.problems()) + ')'}"
+          + (f"; signed under {mail.dkim_record}" if mail.signing else ""))
     for u in names:
         print(f"  {u['name']}: created {u['createdAt']}, last sign-in {u['seenAt'] or 'never'}"
               + (f", {u['email']}{' (verified)' if u['verified'] else ''}" if u["email"] else ""))
@@ -161,11 +162,75 @@ def mail_setup(args, ask=None, hidden=None) -> int:
     return 0
 
 
+def mail_dkim(args) -> int:
+    """`mail dkim init [--domain D] [--selector S] [--new]`: a signing key for your domain (the user, 2026-11-06:
+    "it looks like i need a domain/email server for this to work": the domain is yours, the server is this
+    app), kept in the login folder (dkim/<domain>.<selector>.pem, in no repository), the three variables
+    saved, the DNS record to add printed. `check`: whether the record is published and is this key's.
+    `show`: the record again."""
+    from liminal_libs import dkim
+    from liminal_libs.mail import DKIM_DOMAIN_VAR, DKIM_KEY_VAR, DKIM_SELECTOR_VAR
+
+    s = MailSettings.from_env()
+    what = (args.address or "").strip().lower()
+    if what == "init":
+        domain = (args.domain or s.signing_domain or "").strip().lower()
+        if not domain:
+            print("a domain is needed: liminal-login mail dkim init --domain your-domain.example "
+                  "(or set a From address at it first: liminal-login mail setup)", file=sys.stderr)
+            return 2
+        selector = (args.selector or s.dkim_selector or "liminal").strip().lower()
+        path = _root(args) / "dkim" / f"{domain}.{selector}.pem"
+        if path.exists() and not args.new:
+            print(f"a key for {selector}._domainkey.{domain} is there already ({path}); --new makes another "
+                  "(the DNS record changes with it)", file=sys.stderr)
+            return 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pem, public = dkim.generate_key()
+        path.write_bytes(pem)
+        save_user_variable(DKIM_KEY_VAR, str(path))
+        save_user_variable(DKIM_SELECTOR_VAR, selector)
+        save_user_variable(DKIM_DOMAIN_VAR, domain)
+        name, value = dkim.dns_record(domain, selector, public)
+        print(f"key made: {path} (keep it: the record below is its public half)\n"
+              f"Add this TXT record where {domain}'s DNS records live (the registrar or DNS host, not the mailbox provider;\n"
+              "a long value may be split there into pieces of 255 characters):\n"
+              f"  name:  {name}\n  value: {value}\n"
+              f"Then `liminal-login mail dkim check` says when it is published. Messages from an address at {domain} are signed from now on.")
+        return 0
+    if not s.signing:
+        print("no signing key yet: liminal-login mail dkim init --domain your-domain.example", file=sys.stderr)
+        return 1
+    try:
+        public = dkim.public_of(Path(s.dkim_key).read_bytes())
+    except (OSError, ValueError) as e:
+        print(f"the key file cannot be read ({s.dkim_key}: {e}): liminal-login mail dkim init --new", file=sys.stderr)
+        return 1
+    name, value = dkim.dns_record(s.signing_domain, s.dkim_selector, public)
+    if what == "show":
+        print(f"  name:  {name}\n  value: {value}")
+        return 0
+    if what != "check":
+        print("liminal-login mail dkim init | check | show", file=sys.stderr)
+        return 2
+    found = dkim.published(name)
+    if found is None:
+        print(f"{name}: no DKIM record found yet (DNS takes minutes, sometimes hours; `mail dkim show` prints what to add)")
+        return 1
+    if found == public:
+        print(f"{name}: published and matching the key here; messages from {s.signing_domain} are signed and provable")
+        return 0
+    print(f"{name}: a record is published but its key is not the one here (`mail dkim show` prints the right value)", file=sys.stderr)
+    return 1
+
+
 def cmd_mail(args) -> int:
     """`mail setup [ADDRESS]` keeps the account; `mail test ADDRESS` sends one message through it, so you see
-    it arrive and read the server's answer."""
+    it arrive and read the server's answer; `mail dkim init|check|show`: the signing key for your domain."""
     if args.action == "setup":
         return mail_setup(args)
+    if args.action == "dkim":
+        return mail_dkim(args)
     if not args.address:
         print("an address is needed: liminal-login mail test you@example.com", file=sys.stderr)
         return 2
@@ -207,9 +272,13 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("name", nargs="?")
     u.add_argument("--email", default=None, help="the user's email address (not verified: no passkey here)")
     u.set_defaults(func=cmd_user)
-    m = sub.add_parser("mail", help="the mail account: setup keeps it (typed here once), test ADDRESS sends one message through it")
-    m.add_argument("action", choices=("setup", "test"))
-    m.add_argument("address", nargs="?", help="test: where to; setup: where a test message goes once the account is kept")
+    m = sub.add_parser("mail", help="the mail account: setup keeps it (typed here once), test ADDRESS sends one message through it, "
+                                   "dkim init|check|show: the signing key for your own domain")
+    m.add_argument("action", choices=("setup", "test", "dkim"))
+    m.add_argument("address", nargs="?", help="test: where to; setup: where a test message goes once the account is kept; dkim: init, check or show")
+    m.add_argument("--domain", default=None, help="dkim init: the domain to sign for (the From address's unless said)")
+    m.add_argument("--selector", default=None, help="dkim init: the record's selector (liminal)")
+    m.add_argument("--new", action="store_true", help="dkim init: a new key though one is there (the DNS record changes)")
     m.set_defaults(func=cmd_mail)
     return p
 

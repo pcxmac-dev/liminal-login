@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 (2026-11-06)
+
+The app as the mail server of your own domain (the user: "it looks like i need a domain/email server for
+this to work"): `liminal-login mail dkim init [--domain D] [--selector S]` makes a signing key for the
+domain (kept in the login folder, `dkim/<domain>.<selector>.pem`, in no repository), saves
+`LIMINAL_SMTP_DKIM_KEY`, `_SELECTOR` and `_DOMAIN`, and prints the TXT record to add at the domain;
+`mail dkim check` says when the record is published and is this key's; `mail dkim show` prints it again.
+From then on every message from an address at the domain is signed (liminal-libs 1.15.0 `dkim`), the
+receipt says so (`sent.signed`), and `status` names the record. The library at 1.15.0 or later.
+
 ## 0.7.0 (2026-11-06)
 
 `liminal-login mail setup [ADDRESS]` (the user: "the server isn't taking the email, its probably being
