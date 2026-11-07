@@ -86,10 +86,13 @@ minutes and five tries, and a new one can be asked for after a minute.
 
 ## Your own domain: the app as its mail server
 
-The user's words: "it looks like i need a domain/email server for this to work". The domain is yours; the
-server can be this app. It signs what it sends for the domain (DKIM, `liminal_libs.dkim`), and one DNS
-record at the domain lets any receiving server check the signature, so a message from an address at your
-domain passes the domain's own policy (DMARC) wherever it lands, home connection or not:
+The user's words: "it looks like i need a domain/email server for this to work". A domain whose mailboxes a
+provider holds (Proton, Gmail) has its mail server already: that provider, which signs and vouches for the
+domain; send through it (`liminal-login mail setup`, above). What follows is for a domain, or a subdomain,
+that no provider holds: the domain is yours and the server can be this app. It signs what it sends for the
+domain (DKIM, `liminal_libs.dkim`), and one DNS record at the domain lets any receiving server check the
+signature, so a message from an address at the domain passes the domain's own policy (DMARC) wherever it
+lands, home connection or not:
 
 1. `liminal-login mail setup`: `direct` at the host prompt, and a From address at your domain.
 2. `liminal-login mail dkim init`: a signing key, kept in the login folder (`dkim/<domain>.<selector>.pem`,
