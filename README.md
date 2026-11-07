@@ -14,6 +14,7 @@ infrastructure").
 pip install -e .
 liminal-login                      # the page at http://127.0.0.1:8795/ (LIMINAL_LOGIN_PORT)
 liminal-login serve --no-browser --port 8795
+liminal-login serve --no-browser --until-quiet   # what the charts app starts for itself: ends when no page is in touch
 liminal-login user add NAME        # a user from the command line (the password typed hidden)
 liminal-login user list
 liminal-login status
@@ -65,4 +66,6 @@ apps' header). `GET /api/status`, `POST /api/users`, `POST /api/sign-in`, `POST 
 `GET /api/me`, `PUT /api/me/password`, `GET /api/pairs`, `GET|PUT|DELETE /api/pairs/<name>`,
 `GET /api/tray`, `GET /api/app`.
 
-Built on liminal-libs 1.8.0 (the apps' frame, outgoing mail). Tests: `pytest -q`.
+Bound into the charts app (liminal-charts): its front serves this page under `/login/` and draws the user
+icon at the foot of its rail; nothing answering at `LIMINAL_LOGIN_URL` (8795), it starts this app for
+itself. Built on liminal-libs 1.9.0 (the apps' frame, outgoing mail, the bindings). Tests: `pytest -q`.

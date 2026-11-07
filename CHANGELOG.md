@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 (2026-11-06)
+
+Bound into the charts app: `serve --until-quiet` ends the server once no page has been in touch for
+LIMINAL_QUIET_SECONDS (600), what the charts app's front starts for itself when nothing answers at
+LIMINAL_LOGIN_URL (liminal-libs 1.9.0's bindings); the page hides its own rail inside another app's page
+(`?embedded=1`), that page's rail holding the user icon.
+
 ## 0.2.0 (2026-11-06)
 
 An account asked for from the page, its passkey by email (the user: "i need a way to create a user and

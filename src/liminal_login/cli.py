@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import sys
 from pathlib import Path
 
@@ -18,6 +19,9 @@ from liminal_libs.mail import MailError, Mailer, MailSettings
 from . import __version__
 from .app import LoginApp, login_dir
 from .users import UserStore
+
+
+QUIET_SECONDS = 600.0  # `serve --until-quiet`: the server ends after this long without a request (LIMINAL_QUIET_SECONDS)
 
 
 def _dir(args) -> Path:
@@ -36,8 +40,9 @@ def cmd_serve(args) -> int:
     print(f"login app: its page at {app.url(port)} (the folder {folder}; "
           f"{'passkeys through ' + mail.host if mail.configured else 'no mail account set (LIMINAL_SMTP_*): no passkeys'}; "
           "Ctrl+C to stop)", flush=True)
+    quiet = float(os.environ.get("LIMINAL_QUIET_SECONDS") or QUIET_SECONDS) if args.until_quiet else None
     try:
-        app.serve(port, open_browser=not args.no_browser)
+        app.serve(port, open_browser=not args.no_browser, until_quiet=quiet)
     finally:
         app.close()
     return 0
@@ -119,6 +124,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="keep the login's page at its port until Ctrl+C")
     s.add_argument("--port", type=int, default=None, help="the page's port (LIMINAL_LOGIN_PORT, 8795)")
     s.add_argument("--no-browser", action="store_true", help="do not open the page in a browser")
+    s.add_argument("--until-quiet", action="store_true",
+                   help=f"end once no page has been in touch for LIMINAL_QUIET_SECONDS ({QUIET_SECONDS:g}): what another app's front starts")
     s.set_defaults(func=cmd_serve)
     st = sub.add_parser("status", help="the users here, whether the page answers, the mail account")
     st.add_argument("--port", type=int, default=None)

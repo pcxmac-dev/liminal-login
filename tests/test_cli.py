@@ -57,9 +57,14 @@ def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, mo
 
 def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):
     ran: list = []
-    monkeypatch.setattr(LoginApp, "serve", lambda self, port=None, open_browser=False, stop=None: ran.append((self.dir, port, open_browser)) or "url")
-    assert cli.main(["serve", "--no-browser", "--port", "8796"]) == 0 and ran == [(folder, 8796, False)]
-    assert cli.main(["--no-browser"]) == 0 and ran[-1] == (folder, 8795, False)  # `liminal-login` alone serves
-    assert cli.main([]) == 0 and ran[-1] == (folder, 8795, True)
+    monkeypatch.setattr(LoginApp, "serve", lambda self, port=None, open_browser=False, stop=None, until_quiet=None:
+                        ran.append((self.dir, port, open_browser, until_quiet)) or "url")
+    assert cli.main(["serve", "--no-browser", "--port", "8796"]) == 0 and ran == [(folder, 8796, False, None)]
+    assert cli.main(["--no-browser"]) == 0 and ran[-1] == (folder, 8795, False, None)  # `liminal-login` alone serves
+    assert cli.main([]) == 0 and ran[-1] == (folder, 8795, True, None)
     monkeypatch.setenv("LIMINAL_LOGIN_PORT", "8801")
     assert cli.main(["serve", "--no-browser"]) == 0 and ran[-1][1] == 8801
+    # started by another app's front: until quiet, LIMINAL_QUIET_SECONDS
+    assert cli.main(["serve", "--no-browser", "--until-quiet"]) == 0 and ran[-1][3] == 600.0
+    monkeypatch.setenv("LIMINAL_QUIET_SECONDS", "30")
+    assert cli.main(["serve", "--no-browser", "--until-quiet"]) == 0 and ran[-1][3] == 30.0
