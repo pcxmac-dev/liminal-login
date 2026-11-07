@@ -47,7 +47,9 @@ def test_the_page_its_icon_and_the_librarys_files(served):
 
 def test_the_first_user_is_made_from_the_page_then_signs_in_and_out(served):
     app, port, lines = served
-    assert _call(port, "GET", "/api/status")[1] == {"users": 0, "signedIn": False, "name": None, "app": app.describe()}
+    st = _call(port, "GET", "/api/status")[1]
+    assert {k: st[k] for k in ("users", "signedIn", "name", "app")} == {"users": 0, "signedIn": False, "name": None, "app": app.describe()}
+    assert st["signup"]["email"] is False
     assert _call(port, "GET", "/api/me")[0] == 401 and _call(port, "GET", "/api/pairs")[0] == 401
     status, data, _ = _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})
     assert status == 201 and data["name"] == "Ada" and "password" not in json.dumps(data)

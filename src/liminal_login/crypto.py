@@ -1,18 +1,22 @@
 """The cryptography of the stores (the user, 2026-11-03: "each user has a key pair db which is
 encrypted by the user password"; "for now lets just use an encrypted hash of the password as the
-decryption key for the keypair db"; "per user").
+decryption key for the keypair db"; "per user"), and the passkeys mailed to create an account.
 
 The unlock key is the salted hash of the password (scrypt, a salt per user, the parameters kept
 with the user so they can be raised later); it is the decryption key of the user's vault key (a
 random key, wrapped under the unlock key with AES-256-GCM), and the vault key seals every pair's
 value, the pair's name bound in as associated data so a value cannot be moved under another name.
 The password itself is never kept: its verifier is a hash of the unlock key, compared in constant
-time. Changing the password re-wraps the vault key alone; the pairs stay as they are."""
+time. Changing the password re-wraps the vault key alone; the pairs stay as they are.
+
+A passkey (`new_code`: eight letters and digits that are never mistaken for one another, in two
+groups) goes out by mail and is kept only as a salted hash, like a password."""
 from __future__ import annotations
 
 import hashlib
 import hmac
 import os
+import secrets
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -22,6 +26,8 @@ SALT_BYTES = 16
 KEY_BYTES = 32
 NONCE_BYTES = 12
 VERIFIER_TAG = b"liminal-login verifier:"
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I: read from a phone, typed on a keyboard
+CODE_LENGTH = 8
 
 
 class Locked(Exception):
@@ -71,3 +77,23 @@ def unseal(key: bytes, nonce: bytes, sealed: bytes, aad: bytes) -> bytes:
         return AESGCM(key).decrypt(nonce, sealed, aad)
     except InvalidTag:
         raise Locked("the key does not open it") from None
+
+
+# -- passkeys --------------------------------------------------------------------------------------
+
+def new_code() -> str:
+    """A passkey to mail: XXXX-XXXX from CODE_ALPHABET (40 bits; five tries, fifteen minutes)."""
+    raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def normal_code(code) -> str:
+    """A typed passkey as compared: upper case, the dash and spaces dropped, a 0 read as O and a 1
+    as I (neither is in the alphabet)."""
+    text = "".join(ch for ch in str(code or "").upper() if ch.isalnum())
+    return text.translate(str.maketrans({"0": "O", "1": "I"}))[:CODE_LENGTH]
+
+
+def code_hash(code: str, salt: bytes) -> bytes:
+    """A passkey as kept: a salted hash (a passkey has entropy enough for five tries, no KDF needed)."""
+    return hashlib.sha256(salt + b"liminal-login passkey:" + normal_code(code).encode("ascii")).digest()

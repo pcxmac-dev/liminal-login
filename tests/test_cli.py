@@ -29,6 +29,32 @@ def test_a_user_is_added_with_the_password_typed_hidden(folder, monkeypatch, cap
     assert "1 user(s)" in out and "not running at port 8795" in out
 
 
+def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, monkeypatch, capsys):
+    from liminal_libs.mail import MailError, MailSettings
+
+    sent: list = []
+
+    class FakeMailer:
+        def __init__(self, log=None):
+            self.settings = MailSettings(host="smtp.example.test", user="me@example.test", password="x", sender="me@example.test")
+
+        def send(self, to, subject, text):
+            if to == "down@example.test":
+                raise MailError("the mail server at smtp.example.test:587 did not take the message: refused")
+            sent.append((to, subject))
+    monkeypatch.setattr(cli, "Mailer", FakeMailer)
+    assert cli.main(["mail", "test", "ada@example.test"]) == 0 and sent == [("ada@example.test", "Liminal: a test message")]
+    assert "sent to ada@example.test through smtp.example.test" in capsys.readouterr().out
+    assert cli.main(["mail", "test", "down@example.test"]) == 1 and "did not take" in capsys.readouterr().err
+    assert cli.main(["mail", "test"]) == 2
+    # a user added from the command line may carry an email, unverified
+    typed = iter(["correct horse battery", "correct horse battery"])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": next(typed))
+    assert cli.main(["user", "add", "Ada", "--email", "ada@example.test"]) == 0
+    assert cli.main(["user", "list"]) == 0 and "ada@example.test" in capsys.readouterr().out
+    assert cli.main(["status"]) == 0 and "mail not set up" in capsys.readouterr().out
+
+
 def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):
     ran: list = []
     monkeypatch.setattr(LoginApp, "serve", lambda self, port=None, open_browser=False, stop=None: ran.append((self.dir, port, open_browser)) or "url")

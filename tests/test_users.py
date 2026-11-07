@@ -17,7 +17,7 @@ def test_a_user_is_made_from_a_name_and_a_password_and_nothing_of_either_is_kept
     assert ada.name == "Ada" and ada.seen_at is None and len(ada.vault_key) == 32 and len(ada.unlock_key) == 32
     assert ada.kdf["name"] == "scrypt" and ada.kdf["n"] == 2 ** 15
     assert users.count() == 1 and users.exists("Ada") and users.exists("ada") and not users.exists("Bob")
-    assert ada.as_dict() == {"name": "Ada", "createdAt": ada.created_at, "seenAt": None}
+    assert ada.as_dict() == {"name": "Ada", "createdAt": ada.created_at, "seenAt": None, "email": None, "verified": False}
     assert "vault_key" not in repr(ada) and "unlock_key" not in repr(ada)
     # the file holds the salt, the parameters, a verifier and the wrapped vault key: not the password, not the keys
     row = sqlite3.connect(str(folder / "users.db")).execute("SELECT * FROM users").fetchone()
