@@ -59,7 +59,15 @@ decide the domain/scope of the login"; "login apps tied to domains (with email s
   to send through; a domain with neither takes no sign-up. The users live under the data folder's
   `login/<domain>/`.
 
-`liminal-login init file:///... | https://domain [--title T] [--serves charts,integrator] [--port P]` writes
+A domain's login has an account of its own, `admin = admin@<a host under the domain>` (`admin@liminal.your-domain.example`,
+say; `admin@<domain>` unless said): the codes come from it, and its host must be valid in DNS (an address or
+a mail record). With it the login checks its mail server: `liminal-login mail check --to you@... --to
+someone@another-server` looks the host up, sends a message to the admin account itself and to each address
+given (yours; one on another server), each with the server's own answer, and reads the admin mailbox (the
+file's `[imap]` section, asked by `mail setup`) until its own message is there. The mail server, your own
+container or a relay, carries everything beyond the local domain; the login only hands it the messages.
+
+`liminal-login init file:///... | https://domain [--title T] [--serves charts,integrator] [--port P] [--admin A]` writes
 the file (a local one into the folder itself, a domain's into the workspace); `liminal-login --cfg PATH`
 or `LIMINAL_LOGIN_CFG` names it, else every app finds `liminal-login.cfg` in the workspace, in the working
 folder or one above it, or in the data folder's `login/`. The charts front starts the login with the file

@@ -15,12 +15,14 @@ import sys
 from pathlib import Path
 
 from liminal_libs import layout, secrets, web
+from liminal_libs.mailbox import Mailbox
 from liminal_libs.apps import FILE_NAME, Scope
 from liminal_libs.config import save_user_variable
 from liminal_libs.logs import Logger
 from liminal_libs.mail import FROM_VAR, HOST_VAR, PASSWORD_VAR, PORT_VAR, SECURITY_VAR, USER_VAR, MailError, Mailer, MailSettings
 
 from . import __version__
+from . import mailcheck
 from .app import DIR_VAR, LoginApp, folder_for, login_dir, namespace_of
 from .users import UserStore
 
@@ -156,13 +158,25 @@ def mail_setup(args, ask=None, hidden=None) -> int:
         password = hidden("Password (typed hidden; empty keeps the one kept): ") if user else ""
     sender = ask(f"From, the address the message comes from [{now.sender or user}]: ").strip() or now.sender or user
     scope = _scope(args)
+    mailbox: dict = {}
+    mailbox_password = ""
+    if scope is not None and scope.path is not None and scope.kind == "domain" and host != "direct":
+        # the admin mailbox, read by `mail check` to see the login's own message arrive
+        box_host = ask(f"Mailbox host, to read the admin account's mail for the checks [{scope.imap.get('host') or host}]: ").strip() or scope.imap.get("host") or host
+        raw = ask(f"Mailbox port [{scope.imap.get('port') or 993}]: ").strip()
+        box_port = raw if raw.isdecimal() else (scope.imap.get("port") or "993")
+        box_user = ask(f"Mailbox user [{scope.imap.get('user') or scope.admin_address}]: ").strip() or scope.imap.get("user") or scope.admin_address
+        mailbox = {"host": box_host, "port": box_port, "security": "ssl" if box_port == "993" else "starttls", "user": box_user}
+        mailbox_password = hidden("Mailbox password (typed hidden; empty: the sending password, or the one kept): ")
     if scope is not None and scope.path is not None:  # the login's own file holds its mail server
         from dataclasses import replace
 
         mail = {**scope.mail, "host": host, "port": str(port), "security": security, "user": user, "from": sender}
-        scope = replace(scope, mail={k: v for k, v in mail.items() if v})
+        scope = replace(scope, mail={k: v for k, v in mail.items() if v}, imap=mailbox or scope.imap)
         scope.write(scope.path)
-        print(f"kept in {scope.path} under [mail]")
+        print(f"kept in {scope.path} under [mail]" + (" and [imap]" if mailbox else ""))
+        if mailbox and (mailbox_password or password):
+            secrets.put("LIMINAL_IMAP_PASSWORD", mailbox_password or password)
     else:
         save_user_variable(HOST_VAR, host)
         save_user_variable(PORT_VAR, str(port))
@@ -261,7 +275,8 @@ def cmd_init(args) -> int:
     if "://" not in url and not url.lower().startswith("file:"):
         url = Path(url).expanduser().resolve().as_uri() if Path(url).expanduser().is_dir() else f"https://{url}"
     try:
-        scope = Scope.parse(f"[login]\nscope = {url}\nmembers = {(args.members or 'domain').strip().lower()}\n")
+        scope = Scope.parse(f"[login]\nscope = {url}\nmembers = {(args.members or 'domain').strip().lower()}\n"
+                            + (f"admin = {args.admin.strip().lower()}\n" if args.admin else ""))
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 2
@@ -274,18 +289,37 @@ def cmd_init(args) -> int:
     scope.write(path)
     print(f"{path}:\n{scope.text()}")
     if scope.kind == "domain":
-        print(f"The users of {scope.domain} sign up with a code sent through "
-              + (scope.mail.get("host") or "the domain's own mail record (MX); name a server under [mail] if it has none") + ".")
+        print(f"The users of {scope.domain} sign up with a code sent from {scope.admin_address} through "
+              + (scope.mail.get("host") or "the domain's own mail record (MX); name a server under [mail] if it has none")
+              + f". The admin account's host, {scope.admin_host}, must be valid in DNS; `liminal-login mail check` tells.")
     else:
         print(f"A local login for {scope.root}: no email; the first user is made on the page or with `liminal-login user add NAME`.")
     return 0
 
 
+def mail_check(args) -> int:
+    """`mail check [--to ADDRESS ...] [--wait SECONDS]`: the login's own check of its mail server with its
+    admin account (mailcheck.py): the admin host in DNS, a message to the admin account sent and seen back
+    in its mailbox, one to each address asked, each with the server's answer. 0 when nothing failed."""
+    scope = _scope(args)
+    if scope is None:
+        print("no login file found (liminal-login.cfg): `liminal-login init https://your-domain` first", file=sys.stderr)
+        return 2
+    mailer = Mailer(log=print, cfg=scope.mail_variables())
+    mailbox = Mailbox(log=print, cfg=scope.imap_variables())
+    checks = mailcheck.run(scope, mailer, mailbox, to=args.to or (), wait=args.wait, log=print)
+    print(mailcheck.report(checks))
+    return 0 if mailcheck.passed(checks) else 1
+
+
 def cmd_mail(args) -> int:
     """`mail setup [ADDRESS]` keeps the account; `mail test ADDRESS` sends one message through it, so you see
-    it arrive and read the server's answer; `mail dkim init|check|show`: the signing key for your domain."""
+    it arrive and read the server's answer; `mail dkim init|check|show`: the signing key for your domain;
+    `mail check`: the server checked with the login's admin account."""
     if args.action == "setup":
         return mail_setup(args)
+    if args.action == "check":
+        return mail_check(args)
     if args.action == "dkim":
         return mail_dkim(args)
     if not args.address:
@@ -328,6 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--serves", default=None, help="the apps this login serves: charts, integrator (charts)")
     i.add_argument("--port", type=int, default=None)
     i.add_argument("--members", default=None, help="a domain's login: domain (addresses at the domain only) or any")
+    i.add_argument("--admin", default=None, help="a domain's login: its own account, admin@<a host under the domain> (admin@<domain>)")
     i.add_argument("--cfg", default=None, help="where to write it (the folder itself for file:, the workspace for a domain)")
     i.add_argument("--force", action="store_true", help="replace a file that is there")
     i.set_defaults(func=cmd_init)
@@ -341,11 +376,13 @@ def build_parser() -> argparse.ArgumentParser:
     u.set_defaults(func=cmd_user)
     m = sub.add_parser("mail", help="the mail account: setup keeps it (typed here once), test ADDRESS sends one message through it, "
                                    "dkim init|check|show: the signing key for your own domain")
-    m.add_argument("action", choices=("setup", "test", "dkim"))
+    m.add_argument("action", choices=("setup", "test", "dkim", "check"))
     m.add_argument("address", nargs="?", help="test: where to; setup: where a test message goes once the account is kept; dkim: init, check or show")
     m.add_argument("--domain", default=None, help="dkim init: the domain to sign for (the From address's unless said)")
     m.add_argument("--selector", default=None, help="dkim init: the record's selector (liminal)")
     m.add_argument("--new", action="store_true", help="dkim init: a new key though one is there (the DNS record changes)")
+    m.add_argument("--to", action="append", default=None, help="check: an address to send to besides the admin account (yours; one on another server)")
+    m.add_argument("--wait", type=float, default=60.0, help="check: how long to look for the message in the admin mailbox (60 s)")
     m.set_defaults(func=cmd_mail)
     return p
 

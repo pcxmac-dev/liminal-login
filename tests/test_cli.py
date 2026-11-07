@@ -159,6 +159,83 @@ def test_the_logins_file_ties_it_to_a_folder_or_a_domain(folder, tmp_path, monke
     assert "1 user(s)" in out and "@example.test" in out
 
 
+def test_the_login_checks_its_mail_server_with_its_admin_account(tmp_path, monkeypatch, capsys):
+    # the user, 2026-11-06: the admin account "would need to be valid in the DNS record ... could be used to test
+    # the server so that it can send and receive with the user email and also see if emails can be sent to
+    # other servers, without error"
+    from liminal_libs import dns
+    from liminal_libs.mail import MailError, Sent
+    from liminal_libs.mailbox import MailboxError
+
+    from liminal_login import mailcheck
+
+    cfg = tmp_path / "domain.cfg"
+    assert cli.main(["init", "example.test", "--admin", "Admin@liminal.example.test", "--cfg", str(cfg)]) == 0
+    out = capsys.readouterr().out
+    assert "admin = admin@liminal.example.test" in out and "liminal.example.test, must be valid in DNS" in out
+    assert cli.main(["init", "example.test", "--admin", "admin@other.test", "--cfg", str(tmp_path / "bad.cfg")]) == 2
+    sent: list = []
+
+    class FakeMailer:
+        def __init__(self, log=None, cfg=None):
+            from liminal_libs.mail import MailSettings
+
+            self.settings = MailSettings.from_env(cfg)
+
+        def send(self, to, subject, text):
+            if "down" in to:
+                raise MailError("the mail server at mail.liminal.example.test:587 refused the address: 550 no such user")
+            sent.append((to, subject))
+            return Sent(to, "mail.liminal.example.test", 587, 250, "2.0.0 Ok: queued as 1", "2026-11-06T22:00:00+00:00", "<1@liminal.example.test>")
+
+    class FakeMailbox:
+        configured = True
+        looked = 0
+
+        def __init__(self, log=None, cfg=None):
+            self.cfg = cfg
+
+        def find(self, text):
+            FakeMailbox.looked += 1
+            return 1 if FakeMailbox.looked >= 2 and any(text in s for _, s in sent) else 0
+    monkeypatch.setattr(cli, "Mailer", FakeMailer)
+    monkeypatch.setattr(cli, "Mailbox", FakeMailbox)
+    monkeypatch.setattr(dns, "addresses", lambda host: ["203.0.113.5"] if host == "liminal.example.test" else [])
+    monkeypatch.setattr(dns, "mx_records", lambda host: ["mail.liminal.example.test"] if host == "liminal.example.test" else [])
+    monkeypatch.setattr(dns, "spf_record", lambda host: "v=spf1 mx -all")
+    monkeypatch.setattr(mailcheck, "POLL_SECONDS", 0.0)
+    monkeypatch.setattr(mailcheck.time, "sleep", lambda s: None)
+    # no server named: the admin host's own mail record; the mailbox named through the file
+    from dataclasses import replace
+
+    from liminal_libs.apps import Scope
+
+    replace(Scope.read(cfg), imap={"host": "mail.liminal.example.test"}).write(cfg)
+    assert cli.main(["--cfg", str(cfg), "mail", "check", "--to", "you@proton.test", "--to", "down@other.test", "--wait", "1"]) == 1
+    out = capsys.readouterr().out
+    assert "     ok  liminal.example.test in DNS" in out and "203.0.113.5" in out and "ok  SPF for liminal.example.test" in out
+    assert "ok  the mail server" in out and "admin@liminal.example.test" in out
+    assert "ok  sent to the admin account itself" in out and "ok  sent to you@proton.test" in out and "FAILED  sent to down@other.test" in out and "550 no such user" in out
+    assert "ok  received back in the admin mailbox" in out and [t for t, _ in sent] == ["admin@liminal.example.test", "you@proton.test"]
+    # a host not in DNS and nothing received: said, and the check fails
+    monkeypatch.setattr(dns, "addresses", lambda host: [])
+    monkeypatch.setattr(dns, "mx_records", lambda host: [])
+    FakeMailbox.find = lambda self, text: 0
+    assert cli.main(["--cfg", str(cfg), "mail", "check", "--wait", "0"]) == 1
+    out = capsys.readouterr().out
+    assert "FAILED  liminal.example.test in DNS" in out and "FAILED  received back in the admin mailbox" in out and "not there after 0 s" in out
+    FakeMailbox.find = lambda self, text: (_ for _ in ()).throw(MailboxError("the mailbox at mail.liminal.example.test:993 refused: bad password"))
+    assert cli.main(["--cfg", str(cfg), "mail", "check", "--wait", "0"]) == 1 and "refused: bad password" in capsys.readouterr().out
+    # no mailbox: the receiving is skipped, not failed; a local login has nothing to check
+    FakeMailbox.configured = False
+    monkeypatch.setattr(dns, "addresses", lambda host: ["203.0.113.5"])
+    assert cli.main(["--cfg", str(cfg), "mail", "check"]) == 0 and "skipped  received back" in capsys.readouterr().out
+    local = tmp_path / "local.cfg"
+    assert cli.main(["init", str(tmp_path), "--cfg", str(local)]) == 0 and capsys.readouterr()
+    assert cli.main(["--cfg", str(local), "mail", "check"]) == 1 and "sends no email" in capsys.readouterr().out
+    assert cli.main(["mail", "check"]) == 2  # no file found (the tests' login is local to its folder)
+
+
 def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):
     ran: list = []
     monkeypatch.setattr(LoginApp, "serve", lambda self, port=None, open_browser=False, stop=None, until_quiet=None:

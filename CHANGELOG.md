@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.0 (2026-11-06)
+
+The admin account of a domain's login, and the server checked with it (the user: "the login-app would need
+it's own admin account ie. admin@liminal.domain.tld it would need to be valid in the DNS record ... the admin
+account could be used to test the server so that it can send and receive with the user email and also see
+if emails can be sent to other servers, without error"; "the container or email server, would be
+responsible for services rendered outside the local domain"): `init --admin admin@<host under the
+domain>` (the file's `admin`; the codes come from it); `liminal-login mail check [--to ADDRESS ...]
+[--wait S]` (mailcheck.py: the admin host in DNS, SPF, the DKIM record when signing, a message to the admin
+account and to each address with the server's answer, the admin mailbox read until the message is back;
+0 when nothing failed); `mail setup` asks for the admin mailbox ([imap]) of a domain's login and keeps its
+password in Windows Credential Manager. The library at 1.17.0 or later.
+
 ## 0.9.0 (2026-11-06)
 
 What a login is tied to (the user: "have like a setup.cfg for the login, and then like other web apps use
