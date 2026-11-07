@@ -69,3 +69,15 @@ def served_mail(folder):
     url = app.start(0)
     yield app, _port(url), lines, mailer
     app.close()
+
+
+@pytest.fixture(autouse=True)
+def _not_this_machines_mail_account(monkeypatch):
+    """The tests never read this machine's mail account: no saved user variables, no secret store, no SMTP
+    variables in the environment (the stand-in mailers say what they are)."""
+    from liminal_libs import mail
+
+    monkeypatch.setattr(mail, "_saved", lambda: {})
+    monkeypatch.setattr(mail, "_secret", lambda name: None)
+    for v in mail.ALL_VARS:
+        monkeypatch.delenv(v, raising=False)

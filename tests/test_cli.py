@@ -24,9 +24,14 @@ def test_a_user_is_added_with_the_password_typed_hidden(folder, monkeypatch, cap
     users = UserStore(folder / "charts" / "users.db")  # the charts namespace, the default
     assert users.verify("Ada", "correct horse battery") is not None and users.count() == 1
     users.close()
-    assert cli.main(["status"]) == 0
+    import socket
+
+    with socket.socket() as free:  # a port nothing answers at (the real login app may well be at 8795)
+        free.bind(("127.0.0.1", 0))
+        port = free.getsockname()[1]
+    assert cli.main(["status", "--port", str(port)]) == 0
     out = capsys.readouterr().out
-    assert "login app for charts: 1 user(s)" in out and "not running at port 8795" in out
+    assert "login app for charts: 1 user(s)" in out and f"not running at port {port}" in out
     # the integrator's namespace: its own users, cookie and port
     assert cli.main(["--for", "integrator", "user", "list"]) == 0 and "no users yet" in capsys.readouterr().out
     assert cli.main(["--for", "integrator", "status"]) == 0 and "port 8796" in capsys.readouterr().out
@@ -53,6 +58,38 @@ def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, mo
     assert "sent to ada@example.test: smtp.example.test:587 answered 250 2.0.0 OK queued as t-1 at 2026-11-06T21:00:00+00:00, message id <t-1@example.test>" in out
     assert cli.main(["mail", "test", "down@example.test"]) == 1 and "did not take" in capsys.readouterr().err
     assert cli.main(["mail", "test"]) == 2
+
+
+def test_the_mail_account_is_set_up_once_from_the_command_line_with_the_password_kept_apart(monkeypatch, capsys):
+    from liminal_libs import mail
+
+    saved: dict = {}
+    kept: dict = {}
+    for v in mail.ALL_VARS:
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setattr(cli, "save_user_variable", lambda name, value: saved.__setitem__(name, value))
+    monkeypatch.setattr(cli.secrets, "put", lambda name, value: kept.__setitem__(name, value))
+    monkeypatch.setattr(cli.secrets, "remove", lambda name: kept.pop(name, None) is not None)
+    monkeypatch.setattr(mail, "_saved", lambda: {k: v for k, v in saved.items() if v})
+    monkeypatch.setattr(mail, "_secret", lambda name: kept.get(name))
+    answers = iter(["bridge", "", "", "me@proton.me", "Me <me@proton.me>"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": "bridge-pw-1")
+    assert cli.main(["mail", "setup"]) == 0
+    out = capsys.readouterr().out
+    assert saved == {"LIMINAL_SMTP_HOST": "127.0.0.1", "LIMINAL_SMTP_PORT": "1025", "LIMINAL_SMTP_SECURITY": "starttls",
+                     "LIMINAL_SMTP_USER": "me@proton.me", "LIMINAL_SMTP_FROM": "Me <me@proton.me>", "LIMINAL_SMTP_PASSWORD": None}
+    assert kept == {"LIMINAL_SMTP_PASSWORD": "bridge-pw-1"} and "bridge-pw-1" not in out
+    assert "kept: 127.0.0.1:1025 starttls, user me@proton.me, from me@proton.me, password in Windows Credential Manager" in out
+    # direct: no account, the password kept so far let go
+    answers = iter(["direct", "me@proton.me"])
+    assert cli.main(["mail", "setup"]) == 0
+    assert saved["LIMINAL_SMTP_HOST"] == "direct" and saved["LIMINAL_SMTP_USER"] is None and saved["LIMINAL_SMTP_FROM"] == "me@proton.me" and kept == {}
+    # a user whose password is neither typed nor kept: not complete, said (a host with no user at all is
+    # a server that asks for none, like a bridge on this machine)
+    answers = iter(["smtp.example.test", "", "", "someone@example.test", ""])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": "")
+    assert cli.main(["mail", "setup"]) == 1 and "go together" in capsys.readouterr().err
     # a user added from the command line may carry an email, unverified
     typed = iter(["correct horse battery", "correct horse battery"])
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": next(typed))

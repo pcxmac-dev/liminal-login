@@ -47,17 +47,21 @@ cookie under `store/data/login/<for>/`. The users' file and the stores live in
 
 ## Sending the codes
 
-Two ways, set in your user environment variables (never in a file of this app's; `liminal_libs.mail`):
+Set it once from the command line: `liminal-login mail setup` asks for the account and keeps the settings as
+your user environment variables and the password in Windows' Credential Manager (never a file, never the
+registry in the clear; `liminal_libs.mail`, `liminal_libs.secrets`). `liminal-login mail test you@proton.me`
+then sends one message and prints the server's answer. A login app already running uses the account at once.
 
-**Direct, no account.** `LIMINAL_SMTP_HOST=direct` and `LIMINAL_SMTP_FROM=you@proton.me` (your address): each
-message goes straight to the mail exchangers of the address it is for, on port 25 with TLS, the way one
-mail server hands a message to another. Nothing secret is kept anywhere. The machine announces itself as
-`LIMINAL_SMTP_HELO`, else its full name, else `liminal.local`. The receiving server may file a message from
-a home connection under spam, or refuse it: the app keeps the server's answer, shows it on the page and
-waits for a code only once the answer was 250. This needs port 25 open outward (`liminal-login mail test
-you@proton.me` tells: the answer, or why not).
+**Through a mail account of yours**, so the receiving server sees a sender it knows and signs for:
 
-**Through a mail account of yours**, so the receiving server sees a sender it knows:
+- Proton (a custom domain means a paid plan, and every paid plan includes Proton Bridge): install the
+  Bridge, sign in to it, and answer `bridge` at the host prompt (127.0.0.1, port 1025, STARTTLS with the
+  Bridge's own certificate); the user and the password are the ones the Bridge window shows for your
+  account. Proton for Business can use an SMTP token at smtp.protonmail.ch:587 instead.
+- Gmail: `gmail` at the host prompt (smtp.gmail.com, 587, STARTTLS); your address and an app password
+  (2-step verification on).
+
+The variables, should you set them by hand:
 
 | Variable | Gmail | Proton |
 |---|---|---|
@@ -68,7 +72,15 @@ you@proton.me` tells: the answer, or why not).
 | `LIMINAL_SMTP_PASSWORD` | an app password (2-step verification on) | the SMTP token, or the Bridge's password |
 | `LIMINAL_SMTP_FROM` | `Liminal <you@gmail.com>` | `Liminal <you@proton.me>` |
 
-Then `liminal-login mail test you@proton.me` sends one message and prints the server's answer, and `liminal-login status`
+**Direct, no account** (`direct` at the host prompt: `LIMINAL_SMTP_HOST=direct`, `LIMINAL_SMTP_FROM` your
+address): each message goes straight to the mail exchangers of the address it is for, on port 25 with TLS,
+the way one mail server hands a message to another; the machine announces itself as `LIMINAL_SMTP_HELO`,
+else its full name, else `liminal.local`. A fallback, not the way: a message that claims your address but
+comes from a home connection fails your provider's own checks (SPF, DKIM, DMARC: Proton quarantines such
+a message for proton.me even after answering 250), so it lands in spam or nowhere. The app keeps the
+server's answer, shows it on the page and waits for a code only once the answer was 250.
+
+`liminal-login mail test you@proton.me` sends one message and prints the server's answer, and `liminal-login status`
 says which account is set. A code is six digits, kept only as a salted hash; it is good for fifteen
 minutes and five tries, and a new one can be asked for after a minute.
 

@@ -14,9 +14,10 @@ import os
 import sys
 from pathlib import Path
 
-from liminal_libs import web
+from liminal_libs import secrets, web
+from liminal_libs.config import save_user_variable
 from liminal_libs.logs import Logger
-from liminal_libs.mail import MailError, Mailer, MailSettings
+from liminal_libs.mail import FROM_VAR, HOST_VAR, PASSWORD_VAR, PORT_VAR, SECURITY_VAR, USER_VAR, MailError, Mailer, MailSettings
 
 from . import __version__
 from .app import LoginApp, login_dir, namespace_of
@@ -108,22 +109,79 @@ def cmd_user(args) -> int:
     return 2
 
 
+PRESETS = {  # what to answer at the host prompt of `mail setup`
+    "bridge": ("127.0.0.1", 1025, "starttls", "Proton Bridge on this machine (any paid Proton plan): the user and the password the Bridge window shows"),
+    "gmail": ("smtp.gmail.com", 587, "starttls", "Gmail: your address and an app password (2-step verification on)"),
+    "direct": ("direct", 25, "starttls", "straight to each address's own mail server, no account (a home connection's message may be filed as spam)"),
+}
+
+
+def mail_setup(args, ask=None, hidden=None) -> int:
+    """`mail setup [ADDRESS]`: the mail account typed here, once: the settings kept as your user environment
+    variables, the password in Windows' Credential Manager (never a file, never the registry in the clear);
+    a login app already running uses it at once. With ADDRESS, one test message goes there after."""
+    ask, hidden = ask or input, hidden or getpass.getpass  # looked up now: a test stands them in
+    now = MailSettings.from_env()
+    print("The mail account the codes go through. At the host prompt: bridge, gmail or direct for a preset, or a host.")
+    host = (ask(f"Host [{now.host or 'bridge'}]: ").strip() or now.host or "bridge").lower()
+    if host in PRESETS:
+        host, port, security, note = PRESETS[host]
+        print(f"  {note}")
+    else:
+        port, security = now.port, now.security
+    if host == "direct":
+        user, password = "", ""
+    else:
+        raw = ask(f"Port [{port}]: ").strip()
+        port = int(raw) if raw.isdecimal() else port
+        security = ask(f"Security, starttls/ssl/none [{security}]: ").strip().lower() or security
+        user = ask(f"User, the account's address [{now.user}]: ").strip() or now.user
+        password = hidden("Password (typed hidden; empty keeps the one kept): ") if user else ""
+    sender = ask(f"From, the address the message comes from [{now.sender or user}]: ").strip() or now.sender or user
+    save_user_variable(HOST_VAR, host)
+    save_user_variable(PORT_VAR, str(port))
+    save_user_variable(SECURITY_VAR, security)
+    save_user_variable(USER_VAR, user or None)
+    save_user_variable(FROM_VAR, sender or None)
+    if password:
+        secrets.put(PASSWORD_VAR, password)
+        save_user_variable(PASSWORD_VAR, None)  # never in the registry in the clear
+    elif not user:
+        secrets.remove(PASSWORD_VAR)
+    s = MailSettings.from_env()
+    d = s.describe()
+    print(f"kept: {d['host']}:{d['port']} {d['security']}, user {d['user'] or '(none)'}, from {d['sender'] or '(none)'}, "
+          f"password {'in Windows Credential Manager' if s.password else '(none)'}")
+    if not s.configured:
+        print("not complete: " + "; ".join(s.problems()), file=sys.stderr)
+        return 1
+    if args.address:
+        return mail_test(args.address)
+    print("set; `liminal-login mail test you@...` sends one message and prints the server's answer")
+    return 0
+
+
 def cmd_mail(args) -> int:
-    """`mail test ADDRESS`: one message through the account in the environment, so you see it arrive."""
-    mailer = Mailer(log=print)
-    if args.action != "test":
-        return 2
+    """`mail setup [ADDRESS]` keeps the account; `mail test ADDRESS` sends one message through it, so you see
+    it arrive and read the server's answer."""
+    if args.action == "setup":
+        return mail_setup(args)
     if not args.address:
         print("an address is needed: liminal-login mail test you@example.com", file=sys.stderr)
         return 2
+    return mail_test(args.address)
+
+
+def mail_test(address: str) -> int:
+    mailer = Mailer(log=print)
     try:
-        sent = mailer.send(args.address, "Liminal: a test message",
+        sent = mailer.send(address, "Liminal: a test message",
                            "This message came from the Liminal login app through the mail account in your environment.\n"
                            "Sign-up codes will come the same way.\n")
     except MailError as e:
         print(str(e), file=sys.stderr)
         return 1
-    print(f"sent to {args.address}: {sent} at {sent.at}, message id {sent.message_id}; "
+    print(f"sent to {address}: {sent} at {sent.at}, message id {sent.message_id}; "
           "look for it (the spam folder too, the first time)")
     return 0
 
@@ -149,9 +207,9 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("name", nargs="?")
     u.add_argument("--email", default=None, help="the user's email address (not verified: no passkey here)")
     u.set_defaults(func=cmd_user)
-    m = sub.add_parser("mail", help="the mail account: test ADDRESS sends one message through it")
-    m.add_argument("action", choices=("test",))
-    m.add_argument("address", nargs="?")
+    m = sub.add_parser("mail", help="the mail account: setup keeps it (typed here once), test ADDRESS sends one message through it")
+    m.add_argument("action", choices=("setup", "test"))
+    m.add_argument("address", nargs="?", help="test: where to; setup: where a test message goes once the account is kept")
     m.set_defaults(func=cmd_mail)
     return p
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 (2026-11-06)
+
+`liminal-login mail setup [ADDRESS]` (the user: "the server isn't taking the email, its probably being
+discarded"; "so it looks like i need a domain/email server"): the mail account typed once at the command
+line (presets `bridge` for Proton Bridge on this machine, `gmail`, `direct`), the settings kept as your user
+environment variables and the password in Windows' Credential Manager (liminal-libs 1.14.0 `secrets`), never
+in the clear; a login app already running uses it at once; with ADDRESS a test message goes there after.
+The README puts the account first (Proton Bridge, Gmail) and direct delivery as the fallback it is: a
+message claiming your address from a home connection fails the provider's own checks and is filed away.
+The library at 1.14.0 or later.
+
 ## 0.6.0 (2026-11-06)
 
 Codes with no mail account (the user: "I only need you to send email, and the signup should take the
