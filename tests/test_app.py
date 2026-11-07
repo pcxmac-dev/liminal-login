@@ -127,6 +127,9 @@ def test_what_the_login_app_refuses_and_when_a_session_ends(served, monkeypatch)
     assert conn.getresponse().status == 403
     assert _call(port, "GET", "/api/me", token="made-up")[0] == 401
     assert _call(port, "GET", "/api/me", token=token)[0] == 200
+    # a browser holding two cookies of the name (a stale one first): the live session counts
+    assert _call(port, "GET", "/api/me", headers={"Cookie": f"{COOKIE}=stale; {COOKIE}={token}"})[0] == 200
+    assert _call(port, "GET", "/api/status", headers={"Cookie": f"{COOKIE}=stale"})[1]["signedIn"] is False
     # the session ends once idle too long: the store closes
     monkeypatch.setenv("LIMINAL_LOGIN_SESSION_MINUTES", "1")
     with app._lock:
