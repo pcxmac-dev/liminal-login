@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 (2026-11-06)
+
+The pairs the plugins ask for (the user: "By the variables"): `GET /api/pairs/known` lists every key
+variable of the plugins installed beside this app as a pair (`massive-api-key` for MASSIVE_API_KEY), with
+the plugin, its label, whether it is a secret and whether the signed-in user has it; the page shows them
+under your pairs, an Add on each fills the form, and the name field offers the ones you lack. The library
+at 1.11.0 or later (`KeyVar.pair`).
+
 ## 0.3.1 (2026-11-06)
 
 A browser carrying several cookies of this app's name (another path, an earlier sign-in): the live

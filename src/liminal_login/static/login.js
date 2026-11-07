@@ -46,7 +46,8 @@
     if (!st.signedIn) { tell(false); return signInForm(st); }
     const me = await api('GET', 'api/me');
     const pairs = (await api('GET', 'api/pairs')).pairs;
-    main.innerHTML = userCard(me) + pairsTable(pairs) + addForm() + changeForm();
+    const known = (await api('GET', 'api/pairs/known')).known;  // the pairs the plugins here ask for
+    main.innerHTML = userCard(me) + pairsTable(pairs) + knownTable(known) + addForm(known) + changeForm();
     wire(me);
     tell(true, me.name);
   }
@@ -205,7 +206,7 @@
   }
 
   function pairsTable(pairs) {
-    if (!pairs.length) return `<h2>Your keys and accounts</h2><p class="muted">No pairs yet. Add one below: a plugin's API key is named <code>&lt;plugin&gt;-account-api-key</code>, its account name <code>&lt;plugin&gt;-account-name</code>.</p>`;
+    if (!pairs.length) return `<h2>Your keys and accounts</h2><p class="muted">No pairs yet. Add one below: a pair is named by the plugin's variable, <code>massive-api-key</code> for <code>MASSIVE_API_KEY</code>; the plugins installed here list the pairs they ask for.</p>`;
     const rows = pairs.map((p) => `<tr data-name="${esc(p.name)}">
         <td class="mono">${esc(p.name)}</td><td><span class="kind">${esc(p.kind)}</span></td><td>${esc(p.label)}</td>
         <td class="muted">${esc(when(p.updatedAt))}</td>
@@ -215,9 +216,21 @@
     return `<h2>Your keys and accounts</h2><table class="list pairs"><thead><tr><th>Name</th><th>Kind</th><th>Label</th><th>Updated</th><th>Value</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
-  function addForm() {
+  function knownTable(known) {
+    // the pairs the plugins installed beside this app ask for (named by their variables: the user,
+    // 2026-11-06, "By the variables"), each set already or one click from the form below
+    if (!known.length) return '';
+    const rows = known.map((k) => `<tr>
+        <td>${esc(k.title || k.plugin)}</td><td class="mono">${esc(k.name)}</td><td>${esc(k.label)}</td>
+        <td class="muted mono">${esc(k.variable)}</td>
+        <td>${k.set ? '<span class="kind">set</span>' : `<button type="button" class="use" data-name="${esc(k.name)}" data-kind="${esc(k.kind)}" data-label="${esc(k.label)}" title="Fill the form below with this pair">Add</button>`}</td></tr>`).join('');
+    return `<h2>Pairs your plugins ask for</h2><table class="list known"><thead><tr><th>Plugin</th><th>Name</th><th>For</th><th>Variable</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function addForm(known) {
+    const options = known.filter((k) => !k.set).map((k) => `<option value="${esc(k.name)}">${esc(k.title || k.plugin)}: ${esc(k.label)}</option>`).join('');
     return `<form id="add" class="add-pair">
-      <div class="field"><label for="pName">Name</label><input id="pName" type="text" placeholder="massive-account-api-key" maxlength="64" required pattern="[a-z0-9][a-z0-9._-]*"></div>
+      <div class="field"><label for="pName">Name</label><input id="pName" type="text" list="knownNames" placeholder="massive-api-key" maxlength="64" required pattern="[a-z0-9][a-z0-9._-]*"><datalist id="knownNames">${options}</datalist></div>
       <div class="field"><label for="pKind">Kind</label><select id="pKind">${KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}</select></div>
       <div class="field"><label for="pLabel">Label</label><input id="pLabel" type="text" placeholder="Massive, the paid plan" maxlength="80"></div>
       <div class="field"><label for="pValue">Value</label><input id="pValue" type="password" autocomplete="off" maxlength="4096" required></div>
@@ -246,6 +259,10 @@
         await api('DELETE', `api/pairs/${encodeURIComponent(name)}`); render();
       });
     });
+    main.querySelectorAll('button.use').forEach((b) => b.addEventListener('click', () => {
+      $('pName').value = b.dataset.name; $('pKind').value = b.dataset.kind; $('pLabel').value = b.dataset.label;
+      $('pValue').focus();
+    }));
     $('add').addEventListener('submit', async (e) => {
       e.preventDefault(); $('addErr').textContent = '';
       try {

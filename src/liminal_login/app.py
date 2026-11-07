@@ -251,6 +251,8 @@ class LoginApp(App):
             return 200, {"changed": True, "unlockFingerprint": s.user.unlock_fingerprint}
         if path == "/api/pairs" and method == "GET":
             return 200, {"pairs": self._require(handler).vault.names()}
+        if path == "/api/pairs/known" and method == "GET":
+            return 200, {"known": self.known_pairs(self.session(handler))}
         if path.startswith("/api/pairs/"):
             s = self._require(handler)
             name = unquote(path[len("/api/pairs/"):])
@@ -324,6 +326,26 @@ class LoginApp(App):
             raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
         self.log(f"login: the account {user.name} was made ({mask(user.email or '')} verified)")
         return self._signed_in(user, 201)
+
+    def known_pairs(self, s: Session | None = None) -> list[dict]:
+        """The pairs the plugins of this login's app ask for (the user, 2026-11-06: "By the
+        variables"): every plugin's key variables as pairs (`massive-api-key` for MASSIVE_API_KEY),
+        with the plugin, its label, whether it is a secret, and whether the signed-in user has it.
+        Read from the plugin registry when asked (the plugins installed beside this app)."""
+        try:
+            from liminal_libs.sources.registry import assistants, providers, publishers
+        except Exception:  # noqa: BLE001 - no registry here: nothing known
+            return []
+        have = {p["name"] for p in s.vault.names()} if s is not None else set()
+        plugins = [*providers().values(), *publishers().values(), *assistants().values()]
+        rows: dict[str, dict] = {}  # by pair: a plugin's parts share their keys (one row, the plugin's own)
+        for p in sorted(plugins, key=lambda p: (getattr(p, "part_of", None) or p.name, p.name)):
+            for k in getattr(p, "keys", ()) or ():
+                rows.setdefault(k.pair, {"name": k.pair, "variable": k.name, "plugin": getattr(p, "part_of", None) or p.name,
+                                         "title": p.title, "label": k.label, "secret": k.secret,
+                                         "kind": "key" if k.secret else "detail", "system": getattr(p, "SYSTEM", ""),
+                                         "set": k.pair in have})
+        return sorted(rows.values(), key=lambda r: (r["plugin"], r["name"]))
 
     def _me(self, s: Session) -> dict:
         """The signed-in user for the page: who, since when, their store and the fingerprints of the

@@ -170,6 +170,30 @@ def test_the_library_client_against_the_real_app(served, monkeypatch):
         worker.key("massive")
 
 
+def test_the_pairs_the_plugins_ask_for_are_listed_by_their_variables(served):
+    # the user, 2026-11-06, "By the variables": the plugins installed beside this app ask for pairs named
+    # after their key variables (massive-api-key for MASSIVE_API_KEY), each once, set or not for the user
+    from liminal_libs.sources.registry import assistants, providers, publishers
+
+    app, port, lines = served
+    plugins = [*providers().values(), *publishers().values(), *assistants().values()]
+    wanted = {k.pair for p in plugins for k in (p.keys or ())}
+    status, data, _ = _call(port, "GET", "/api/pairs/known")  # without a session: what there is, none set
+    known = data["known"]
+    assert status == 200 and {r["name"] for r in known} == wanted and len(known) == len(wanted)
+    assert not any(r["set"] for r in known) and known == sorted(known, key=lambda r: (r["plugin"], r["name"]))
+    assert all(r["variable"] == r["variable"].upper() and r["kind"] in ("key", "detail") and r["kind"] == ("key" if r["secret"] else "detail")
+               and r["name"] == r["variable"].lower().replace("_", "-") for r in known)
+    if not wanted:  # no plugin installed beside this app (CI): nothing is known, and that is the answer
+        return
+    _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})
+    token = _call(port, "POST", "/api/sign-in", {"name": "Ada", "password": "correct horse battery"})[1]["token"]
+    first = known[0]
+    assert _call(port, "PUT", f"/api/pairs/{first['name']}", {"value": "a-test-value", "kind": first["kind"]}, token=token)[0] == 200
+    after = {r["name"]: r for r in _call(port, "GET", "/api/pairs/known", token=token)[1]["known"]}
+    assert after[first["name"]]["set"] and not any(r["set"] for n, r in after.items() if n != first["name"])
+
+
 def test_the_login_folder_is_the_data_folders_unless_said(monkeypatch, tmp_path):
     monkeypatch.setenv("LIMINAL_LOGIN_DIR", str(tmp_path / "x"))
     assert login_dir() == tmp_path / "x"
