@@ -276,6 +276,17 @@ class UserStore:
             self._con.commit()
         return code
 
+    def forget_signup(self, email) -> bool:
+        """The sign-up under way for `email` dropped (its code never went out): nothing waits for it."""
+        try:
+            email = clean_email(email)
+        except ValueError:
+            return False
+        with self._lock:
+            n = self._con.execute("DELETE FROM signups WHERE email = ?", (email,)).rowcount
+            self._con.commit()
+        return n > 0
+
     def signup(self, email) -> dict | None:
         """The sign-up under way for `email`: when its code was sent and expires, the tries made,
         whether the code came back right; None when there is none."""

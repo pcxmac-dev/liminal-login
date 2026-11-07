@@ -20,14 +20,16 @@ class FakeMailer(Mailer):
         self.sent: list[tuple[str, str, str]] = []
         self.refuse: str | None = None  # a MailError's reason, when the server should refuse
 
-    def send(self, to: str, subject: str, text: str) -> None:
-        from liminal_libs.mail import MailError
+    def send(self, to: str, subject: str, text: str):
+        from liminal_libs.mail import MailError, Sent
 
         if not self.configured:
             raise MailError("email sending is not set up: " + "; ".join(self.settings.problems()))
         if self.refuse:
             raise MailError(self.refuse)
         self.sent.append((to, subject, text))
+        return Sent(to, self.settings.host, self.settings.port, 250, "2.0.0 OK queued as fake-1", "2026-11-06T21:00:00+00:00",
+                    "<fake-1@example.test>")
 
     def last_code(self) -> str:
         """The six-digit code in the last message (the line of its own)."""

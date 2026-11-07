@@ -137,6 +137,11 @@ def test_the_first_account_is_made_with_a_code_when_mail_is_set_up(served_mail):
     assert _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})[0] == 409
     status, data, _ = _call(port, "POST", "/api/signup", {"email": "ada@example.test"})
     assert status == 202 and data["email"] == "a***@example.test" and data["minutes"] == 15
+    # the mail server's word that it took the message, kept for the page and the status
+    assert data["sent"] == {"to": "a***@example.test", "host": "smtp.example.test", "port": 587, "code": 250,
+                            "reply": "2.0.0 OK queued as fake-1", "at": "2026-11-06T21:00:00+00:00", "messageId": "<fake-1@example.test>"}
+    assert _call(port, "GET", "/api/status")[1]["signup"]["lastSent"] == data["sent"]
+    assert any("answered 250 2.0.0 OK queued as fake-1" in m for m in lines)
     to, subject, text = mailer.sent[-1]
     code = mailer.last_code()
     assert to == "ada@example.test" and subject == "Your Liminal Charts code" and "Liminal Charts" in text and code in text
@@ -168,7 +173,10 @@ def test_the_first_account_is_made_with_a_code_when_mail_is_set_up(served_mail):
     # the mail server refusing: the sign-up is told and nothing is made
     mailer.refuse = "the mail server at smtp.example.test:587 did not take the message: timed out"
     status, data, _ = _call(port, "POST", "/api/signup", {"email": "eve@example.test"})
-    assert status == 503 and "could not be sent" in data["error"] and "timed out" in data["error"]
+    assert status == 503 and "could not be sent" in data["error"] and "timed out" in data["error"] and "nothing waits" in data["error"]
+    # the sign-up was dropped with the refusal: nothing waits for a code that never went out
+    assert app.users.signup("eve@example.test") is None and _call(port, "POST", "/api/signup/resend", {"email": "eve@example.test"})[0] == 400
+    assert any("the sign-up dropped" in m for m in lines)
 
 
 def test_without_a_mail_account_the_first_user_is_made_on_the_page_and_a_signup_says_what_to_set(served):

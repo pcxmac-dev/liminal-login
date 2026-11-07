@@ -93,6 +93,7 @@ class LoginApp(App):
         self.dir.mkdir(parents=True, exist_ok=True)
         self.users = UserStore(self.dir / "users.db")
         self.mailer = mailer or Mailer(log=self.log)
+        self.last_sent: dict | None = None  # the mail server's word on the last code sent (the status, the page)
         self.failure_delay = failure_delay
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
@@ -201,7 +202,7 @@ class LoginApp(App):
             s = self.session(handler)
             return 200, {"users": self.users.count(), "signedIn": s is not None, "name": s.user.name if s else None,
                          "for": self.namespace, "forTitle": self.title_for,
-                         "signup": {"email": self.mailer.configured, **self.mailer.settings.describe()},
+                         "signup": {"email": self.mailer.configured, **self.mailer.settings.describe(), "lastSent": self.last_sent},
                          "app": self.describe()}
         if path == "/api/users" and method == "GET":
             self._require(handler)
@@ -277,13 +278,20 @@ class LoginApp(App):
         return super().api(handler, method, path, query, body)
 
     # -- a sign-up: the email, its code, then the name and the password ----------------------------
-    def _send_code(self, email: str, code: str) -> None:
+    def _send_code(self, email: str, code: str) -> dict:
+        """The code mailed, and the mail server's word that it took the message (the user, 2026-11-06:
+        "only if it did, does it wait for the response, if no valid response than don't have me wait to
+        enter a code"): a refusal drops the sign-up, so nothing waits for a code that never went out."""
         try:
-            self.mailer.send(email, CODE_SUBJECT.format(title=self.title_for),
-                             CODE_TEXT.format(title=self.title_for, code=code, minutes=CODE_MINUTES))
+            sent = self.mailer.send(email, CODE_SUBJECT.format(title=self.title_for),
+                                    CODE_TEXT.format(title=self.title_for, code=code, minutes=CODE_MINUTES))
         except MailError as e:
-            self.log(f"login: the code for {mask(email)} could not be sent: {e}")
-            raise Refused(HTTPStatus.SERVICE_UNAVAILABLE, f"the code could not be sent: {e}") from None
+            self.users.forget_signup(email)
+            self.log(f"login: the code for {mask(email)} could not be sent, the sign-up dropped: {e}")
+            raise Refused(HTTPStatus.SERVICE_UNAVAILABLE, f"the code could not be sent, so nothing waits for one: {e}") from None
+        receipt = sent.as_dict()
+        self.last_sent = receipt
+        return receipt
 
     def _signup(self, body: dict):
         """An email: its code goes out; the sign-up waits for it."""
@@ -295,9 +303,10 @@ class LoginApp(App):
         except ValueError as e:
             raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
         waiting = self.users.signup(body.get("email"))
-        self._send_code(waiting["email"], code)
-        self.log(f"login: a sign-up began for {mask(waiting['email'])}; its code went out")
-        return 202, {"email": mask(waiting["email"]), "expiresAt": waiting["expiresAt"], "minutes": CODE_MINUTES}
+        sent = self._send_code(waiting["email"], code)
+        self.log(f"login: a sign-up began for {mask(waiting['email'])}; its code went out "
+                 f"({sent['host']} answered {sent['code']} {sent['reply']})")
+        return 202, {"email": mask(waiting["email"]), "expiresAt": waiting["expiresAt"], "minutes": CODE_MINUTES, "sent": sent}
 
     def _resend(self, body: dict):
         try:
@@ -305,8 +314,8 @@ class LoginApp(App):
         except ValueError as e:
             raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
         waiting = self.users.signup(body.get("email"))
-        self._send_code(waiting["email"], code)
-        return 202, {"email": mask(waiting["email"]), "expiresAt": waiting["expiresAt"], "minutes": CODE_MINUTES}
+        sent = self._send_code(waiting["email"], code)
+        return 202, {"email": mask(waiting["email"]), "expiresAt": waiting["expiresAt"], "minutes": CODE_MINUTES, "sent": sent}
 
     def _verify(self, body: dict):
         """The code typed: right, the proof for the last step; wrong, a try spent."""

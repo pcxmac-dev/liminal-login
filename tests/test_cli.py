@@ -34,7 +34,7 @@ def test_a_user_is_added_with_the_password_typed_hidden(folder, monkeypatch, cap
 
 
 def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, monkeypatch, capsys):
-    from liminal_libs.mail import MailError, MailSettings
+    from liminal_libs.mail import MailError, MailSettings, Sent
 
     sent: list = []
 
@@ -46,9 +46,11 @@ def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, mo
             if to == "down@example.test":
                 raise MailError("the mail server at smtp.example.test:587 did not take the message: refused")
             sent.append((to, subject))
+            return Sent(to, "smtp.example.test", 587, 250, "2.0.0 OK queued as t-1", "2026-11-06T21:00:00+00:00", "<t-1@example.test>")
     monkeypatch.setattr(cli, "Mailer", FakeMailer)
     assert cli.main(["mail", "test", "ada@example.test"]) == 0 and sent == [("ada@example.test", "Liminal: a test message")]
-    assert "sent to ada@example.test through smtp.example.test" in capsys.readouterr().out
+    out = capsys.readouterr().out  # the server's own answer, and the id to find the message by
+    assert "sent to ada@example.test: smtp.example.test:587 answered 250 2.0.0 OK queued as t-1 at 2026-11-06T21:00:00+00:00, message id <t-1@example.test>" in out
     assert cli.main(["mail", "test", "down@example.test"]) == 1 and "did not take" in capsys.readouterr().err
     assert cli.main(["mail", "test"]) == 2
     # a user added from the command line may carry an email, unverified

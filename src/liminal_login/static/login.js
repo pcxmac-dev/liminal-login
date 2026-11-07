@@ -20,6 +20,7 @@
   $('railUser').innerHTML = icon('user', 30);
   let signup = null;  // a sign-up under way: { email, token }
   let forTitle = 'Liminal';
+  let mail = {};  // how codes go out (the status's signup: the host, the sender, the last send's receipt)
 
   function tell(signedIn, name) {
     // the page holding this one (the charts app's) learns who is signed in
@@ -41,6 +42,7 @@
     try { st = await api('GET', 'api/status'); }
     catch (e) { main.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
     forTitle = st.forTitle || 'Liminal';
+    mail = st.signup || {};
     document.title = `${forTitle}: sign in`;
     if (signup) return signup.token ? detailsForm() : codeForm();
     if (!st.signedIn) { tell(false); return signInForm(st); }
@@ -117,7 +119,8 @@
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('user', 56)}</div>
       <h1>Sign up</h1>
-      <p class="muted">Your email first: a six-digit code goes to it. Then you choose your account name and password.</p>
+      <p class="muted">Your email first: a six-digit code goes to it through <b>${esc(mail.host || 'the mail account set here')}</b>${mail.sender ? ` as ${esc(mail.sender)}` : ''}. Then you choose your account name and password.</p>
+      ${mail.lastSent ? `<p class="muted">The last code went out at ${esc(when(mail.lastSent.at))}: the server answered <span class="mono">${esc(mail.lastSent.code)} ${esc(mail.lastSent.reply)}</span>.</p>` : ''}
       <form id="email">
         <div class="field"><label for="address">Email</label><input id="address" type="email" autocomplete="email" maxlength="254" required></div>
         <div class="row end">${first ? '' : '<button type="button" id="back">Back</button>'}<button type="submit" class="accent">Send my code</button></div>
@@ -127,7 +130,7 @@
       e.preventDefault();
       const email = $('address').value.trim();
       $('err').textContent = '';
-      try { await api('POST', 'api/signup', { email }); signup = { email, token: null }; render(); }
+      try { const out = await api('POST', 'api/signup', { email }); signup = { email, token: null, sent: out.sent }; render(); }
       catch (err) { $('err').textContent = err.message; }
     });
     if (!first) $('back').addEventListener('click', () => render());
@@ -139,7 +142,8 @@
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('key', 56)}</div>
       <h1>Your code</h1>
-      <p class="muted">A six-digit code went to <b>${esc(signup.email)}</b>. Type it here within 15 minutes.</p>
+      <p class="muted">A six-digit code went to <b>${esc(signup.email)}</b>. Type it here within 15 minutes (look in spam too).</p>
+      ${signup.sent ? `<p class="muted receipt">${esc(signup.sent.host)} took the message at ${esc(when(signup.sent.at))} and answered <span class="mono">${esc(signup.sent.code)} ${esc(signup.sent.reply)}</span>${signup.sent.messageId ? `; message id <span class="mono">${esc(signup.sent.messageId)}</span>` : ''}.</p>` : ''}
       <form id="code">
         <div class="field"><label for="digits">Code</label><input id="digits" type="text" class="mono" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" maxlength="8" required></div>
         <div class="row end"><button type="button" id="resend">Send it again</button><button type="button" id="cancel">Start over</button><button type="submit" class="accent">Continue</button></div>
@@ -153,7 +157,11 @@
     });
     $('resend').addEventListener('click', async () => {
       $('err').textContent = ''; $('note').textContent = '';
-      try { await api('POST', 'api/signup/resend', { email: signup.email }); $('note').textContent = 'A new code went out; the old one no longer counts.'; }
+      try {
+        const out = await api('POST', 'api/signup/resend', { email: signup.email });
+        signup.sent = out.sent;
+        $('note').textContent = `A new code went out${out.sent ? ` (${out.sent.host} answered ${out.sent.code} ${out.sent.reply})` : ''}; the old one no longer counts.`;
+      }
       catch (err) { $('err').textContent = err.message; }
     });
     $('cancel').addEventListener('click', () => { signup = null; render(); });

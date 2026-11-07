@@ -117,13 +117,14 @@ def cmd_mail(args) -> int:
         print("an address is needed: liminal-login mail test you@example.com", file=sys.stderr)
         return 2
     try:
-        mailer.send(args.address, "Liminal: a test message",
-                    "This message came from the Liminal login app through the mail account in your environment.\n"
-                    "Passkeys for new accounts will come the same way.\n")
+        sent = mailer.send(args.address, "Liminal: a test message",
+                           "This message came from the Liminal login app through the mail account in your environment.\n"
+                           "Sign-up codes will come the same way.\n")
     except MailError as e:
         print(str(e), file=sys.stderr)
         return 1
-    print(f"sent to {args.address} through {mailer.settings.host}: look for it (the spam folder too, the first time)")
+    print(f"sent to {args.address}: {sent} at {sent.at}, message id {sent.message_id}; "
+          "look for it (the spam folder too, the first time)")
     return 0
 
 

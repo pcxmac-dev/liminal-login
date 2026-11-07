@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 (2026-11-06)
+
+The mail server's word before you wait for a code (the user: "i never received an email ... i will need a
+way to check the server response to see if it received the email and only if it did, does it wait for the
+response, if no valid response than don't have me wait to enter a code"): `POST /api/signup` and
+`/api/signup/resend` answer 202 only once the server took the message, with `sent` (the server, its reply
+with the code, when, the message id: liminal-libs 1.12.0 `mail.Sent`), and the page shows it on the code
+step; a refusal drops the sign-up and answers 503 in the server's own words, so nothing waits for a code
+that never went out. `GET /api/status` carries the last send (`signup.lastSent`), shown on the email step
+with the route the codes take (the host and the sender); `liminal-login mail test` prints the server's
+answer and the message id.
+
 ## 0.4.0 (2026-11-06)
 
 The pairs the plugins ask for (the user: "By the variables"): `GET /api/pairs/known` lists every key
