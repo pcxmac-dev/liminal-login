@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 (2026-11-06)
+
+Codes with no mail account (the user: "I only need you to send email, and the signup should take the
+email, there should be no example domains used"; "you can use a terminal to send email if to the correct
+port with right protocol"): with liminal-libs 1.13.0's direct delivery (`LIMINAL_SMTP_HOST=direct`,
+`LIMINAL_SMTP_FROM` your address) a sign-up's code goes straight to the mail exchangers of the address
+given, port 25 with TLS; the page says so on the email step; the README puts it first. The library at
+1.13.0 or later.
+
 ## 0.5.0 (2026-11-06)
 
 The mail server's word before you wait for a code (the user: "i never received an email ... i will need a

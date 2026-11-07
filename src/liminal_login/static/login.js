@@ -72,7 +72,7 @@
         <div class="row end"><button type="submit" class="accent">Sign in</button></div>
         <p id="err" class="error"></p></form>`}
       <p class="muted">${mail ? `<button type="button" id="toSignup" class="${first ? 'accent' : ''}">Sign up</button>`
-        : 'Signing up needs email sending set up on this machine (LIMINAL_SMTP_HOST, _USER, _PASSWORD, _FROM), or <code>liminal-login user add NAME</code> at the command line.'}</p>
+        : 'Signing up needs email sending set up on this machine (LIMINAL_SMTP_HOST=direct with LIMINAL_SMTP_FROM, your address; or a mail account: _HOST, _USER, _PASSWORD, _FROM), or <code>liminal-login user add NAME</code> at the command line.'}</p>
     </div>`;
     if (!first) {
       $('signin').addEventListener('submit', async (e) => {
@@ -119,7 +119,7 @@
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('user', 56)}</div>
       <h1>Sign up</h1>
-      <p class="muted">Your email first: a six-digit code goes to it through <b>${esc(mail.host || 'the mail account set here')}</b>${mail.sender ? ` as ${esc(mail.sender)}` : ''}. Then you choose your account name and password.</p>
+      <p class="muted">Your email first: a six-digit code goes to it ${mail.direct ? 'straight through its own mail server' : `through <b>${esc(mail.host || 'the mail account set here')}</b>`}${mail.sender ? ` as ${esc(mail.sender)}` : ''}. Then you choose your account name and password.</p>
       ${mail.lastSent ? `<p class="muted">The last code went out at ${esc(when(mail.lastSent.at))}: the server answered <span class="mono">${esc(mail.lastSent.code)} ${esc(mail.lastSent.reply)}</span>.</p>` : ''}
       <form id="email">
         <div class="field"><label for="address">Email</label><input id="address" type="email" autocomplete="email" maxlength="254" required></div>

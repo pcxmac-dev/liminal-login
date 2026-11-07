@@ -38,16 +38,26 @@ cookie under `store/data/login/<for>/`. The users' file and the stores live in
 - A random *vault key* per user, wrapped under the unlock key (AES-256-GCM), seals every pair's
   value, the pair's name bound in: a value cannot be read without the password, nor moved under
   another name. Changing the password re-wraps the vault key; the pairs stay.
-- A pair is named for what it is: `massive-account-api-key`, `claude-account-name`,
-  `<plugin>-account-password`; its kind is `key`, `account`, `password` or `detail`.
+- A pair is named by the plugin's variable: `massive-api-key` for `MASSIVE_API_KEY`, `claude-account` for
+  `CLAUDE_ACCOUNT` (the page lists the pairs the plugins installed here ask for); its kind is `key`,
+  `account`, `password` or `detail`.
 - A session (sign-in) holds the keys in memory only, for the page (an HttpOnly cookie) and for the
   programs given its token (`X-Liminal-Session`); it ends at sign-out or after
   `LIMINAL_LOGIN_SESSION_MINUTES` (480) without a request.
 
-## Sending the passkeys: your mail account
+## Sending the codes
 
-Set one SMTP account of yours in your user environment variables (never in a file of this app's;
-`liminal_libs.mail`), so the receiving server sees a sender it knows and the message is not blocked:
+Two ways, set in your user environment variables (never in a file of this app's; `liminal_libs.mail`):
+
+**Direct, no account.** `LIMINAL_SMTP_HOST=direct` and `LIMINAL_SMTP_FROM=you@proton.me` (your address): each
+message goes straight to the mail exchangers of the address it is for, on port 25 with TLS, the way one
+mail server hands a message to another. Nothing secret is kept anywhere. The machine announces itself as
+`LIMINAL_SMTP_HELO`, else its full name, else `liminal.local`. The receiving server may file a message from
+a home connection under spam, or refuse it: the app keeps the server's answer, shows it on the page and
+waits for a code only once the answer was 250. This needs port 25 open outward (`liminal-login mail test
+you@proton.me` tells: the answer, or why not).
+
+**Through a mail account of yours**, so the receiving server sees a sender it knows:
 
 | Variable | Gmail | Proton |
 |---|---|---|
@@ -58,7 +68,7 @@ Set one SMTP account of yours in your user environment variables (never in a fil
 | `LIMINAL_SMTP_PASSWORD` | an app password (2-step verification on) | the SMTP token, or the Bridge's password |
 | `LIMINAL_SMTP_FROM` | `Liminal <you@gmail.com>` | `Liminal <you@proton.me>` |
 
-Then `liminal-login mail test you@example.com` sends one message through it, and `liminal-login status`
+Then `liminal-login mail test you@proton.me` sends one message and prints the server's answer, and `liminal-login status`
 says which account is set. A code is six digits, kept only as a salted hash; it is good for fifteen
 minutes and five tries, and a new one can be asked for after a minute.
 
