@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1 (2026-11-07)
+
+The page is painted in the UI's theme (the user: "add a preferences plugin for the 'UI' and add the different
+themes"): the library's theme.js (liminal-libs 1.23.0) reads `GET /api/ui`, the theme the platform's Preferences
+plugin keeps for every app's page (Dark, Midnight, Graphite, Light, Paper); a `theme` in the address wins.
+
 ## 0.11.0 (2026-11-07)
 
 The mail server as a container (the user: "i want to integrate docker with the liminal framework"): the
