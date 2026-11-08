@@ -236,6 +236,52 @@ def test_the_login_checks_its_mail_server_with_its_admin_account(tmp_path, monke
     assert cli.main(["mail", "check"]) == 2  # no file found (the tests' login is local to its folder)
 
 
+def test_the_mail_server_runs_as_a_container_the_login_file_declares(tmp_path, monkeypatch, capsys):
+    # the user, 2026-11-07: "i want to integrate docker with the liminal framework": the [server] section, run
+    # through the framework's docker driver, here through its stand-in runner
+    from dataclasses import replace
+
+    from liminal_libs import dns
+    from liminal_libs.apps import Scope
+    from liminal_libs.docker import Docker
+
+    try:
+        from test_docker_runner import Runner
+    except ImportError:
+        from tests.test_docker_runner import Runner
+
+    cfg = tmp_path / "domain.cfg"
+    assert cli.main(["init", "example.test", "--admin", "admin@liminal.example.test", "--cfg", str(cfg)]) == 0 and capsys.readouterr()
+    assert cli.main(["--cfg", str(cfg), "server", "status"]) == 2 and "no [server] image" in capsys.readouterr().err
+    replace(Scope.read(cfg), server={"image": "foxcpp/maddy:0.8", "ports": "25:25, 587:587, 993:993", "volumes": "./mail:/data",
+                                     "env_MADDY_DOMAIN": "example.test"}).write(cfg)
+    runner = Runner(rows=[])
+    monkeypatch.setattr(Scope, "docker", lambda self, **kw: Docker(runner=runner, env={}, **kw))
+    assert cli.main(["--cfg", str(cfg), "server", "show"]) == 0
+    line = capsys.readouterr().out
+    assert line.startswith("docker run -d --name liminal-mail-example-test") and "--hostname liminal.example.test" in line and "-e MADDY_DOMAIN=example.test" in line
+    assert cli.main(["--cfg", str(cfg), "server", "status"]) == 1 and "not made yet" in capsys.readouterr().out
+    assert cli.main(["--cfg", str(cfg), "server", "up"]) == 0 and "liminal-mail-example-test made: running" in capsys.readouterr().out
+    assert cli.main(["--cfg", str(cfg), "server", "status"]) == 0 and "health healthy" in capsys.readouterr().out
+    assert cli.main(["--cfg", str(cfg), "server", "logs", "--tail", "3"]) == 0 and "maddy started" in capsys.readouterr().out
+    assert cli.main(["--cfg", str(cfg), "server", "exec", "--", "maddy", "creds", "list"]) == 0 and "ok from inside" in capsys.readouterr().out
+    assert runner.calls[-1][1:] == ["exec", "liminal-mail-example-test", "maddy", "creds", "list"]
+    # the check names the container first
+    monkeypatch.setattr(dns, "addresses", lambda host: ["203.0.113.5"])
+    monkeypatch.setattr(dns, "mx_records", lambda host: [])
+    monkeypatch.setattr(dns, "spf_record", lambda host: "")
+    monkeypatch.setattr(cli, "Mailer", lambda log=None, cfg=None: type("M", (), {"settings": type("S", (), {"configured": False, "signing": False, "problems": lambda self: ["no server"]})()})())
+    assert cli.main(["--cfg", str(cfg), "mail", "check"]) == 1
+    out = capsys.readouterr().out
+    assert "     ok  the container liminal-mail-example-test" in out and "running" in out
+    assert cli.main(["--cfg", str(cfg), "server", "down"]) == 0 and "stopped (its data kept)" in capsys.readouterr().out
+    assert cli.main(["--cfg", str(cfg), "mail", "check"]) == 1 and "FAILED  the container liminal-mail-example-test" in capsys.readouterr().out
+    # without Docker: said, and nothing else pretends
+    monkeypatch.setattr(Scope, "docker", lambda self, **kw: Docker(runner=Runner(rows=[], version={"Client": {"Version": "1"}}), env={}, **kw))
+    assert cli.main(["--cfg", str(cfg), "server", "up"]) == 1 and "no Docker engine answers" in capsys.readouterr().err
+    assert cli.main(["--cfg", str(cfg), "server", "status"]) == 1 and "not running: Docker is not available" in capsys.readouterr().out
+
+
 def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):
     ran: list = []
     monkeypatch.setattr(LoginApp, "serve", lambda self, port=None, open_browser=False, stop=None, until_quiet=None:

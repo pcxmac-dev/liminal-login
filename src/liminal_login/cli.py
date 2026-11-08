@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from liminal_libs import layout, secrets, web
+from liminal_libs.docker import DockerError, command_line
 from liminal_libs.mailbox import Mailbox
 from liminal_libs.apps import FILE_NAME, Scope
 from liminal_libs.config import save_user_variable
@@ -263,6 +264,64 @@ def mail_dkim(args) -> int:
     return 1
 
 
+def cmd_server(args) -> int:
+    """`server up|down|status|logs|pull|exec` (the user, 2026-11-07: "integrate docker with the liminal framework"):
+    the mail server container the login's file declares under [server] (liminal_libs.docker), on this
+    machine's Docker or the context's: up makes or starts it, down stops it (its data kept), status says,
+    logs prints its last lines, pull fetches its image, exec runs a command inside it."""
+    scope = _scope(args)
+    if scope is None:
+        print("no login file found (liminal-login.cfg): `liminal-login init https://your-domain` first", file=sys.stderr)
+        return 2
+    service = scope.service(_root(args))
+    if service is None:
+        print(f"no [server] image in {scope.path or 'the login file'}: the mail server container to run (image = foxcpp/maddy:latest, say)", file=sys.stderr)
+        return 2
+    docker = scope.docker(log=print)
+    what = (args.address or "status").strip().lower()
+    try:
+        if what == "status":
+            d = docker.describe()
+            print(f"docker on {d['where']}: " + (f"engine {d['engine']} ({d['os']}/{d['arch']})" if d["available"] else d.get("problem", "not installed")))
+            print(f"the mail server container: {service.name} from {service.image}, host name {service.hostname}, ports {', '.join(service.ports) or 'none'}")
+            if not d["available"]:
+                print("not running: Docker is not available here" + ("" if docker.context or docker.host else "; install Docker Desktop, or name a context under [server] (a VPS)"))
+                return 1
+            c = docker.container(service.name)
+            print(f"{service.name}: " + (f"{c.state} ({c.status}); health {docker.health(c.name)}; ports {c.ports or 'none'}" if c else "not made yet: `liminal-login server up`"))
+            return 0 if c and c.running else 1
+        if what == "up":
+            if not docker.available():
+                print(f"Docker is not available on {docker.where}: " + docker.describe().get("problem", "not installed"), file=sys.stderr)
+                return 1
+            c, done = docker.ensure(service)
+            print(f"{service.name} {done}: {c.state} ({c.status}) on {docker.where}; `liminal-login mail check` tells whether it serves")
+            return 0
+        if what == "down":
+            print(f"{service.name}: " + ("stopped (its data kept)" if docker.stop(service.name) else "not there"))
+            return 0
+        if what == "logs":
+            print(docker.logs(service.name, tail=args.tail), end="")
+            return 0
+        if what == "pull":
+            print(docker.pull(service.image), end="")
+            return 0
+        if what == "exec":
+            if not args.command:
+                print("a command is needed: liminal-login server exec -- maddy creds list", file=sys.stderr)
+                return 2
+            print(docker.exec(service.name, *args.command), end="")
+            return 0
+        if what == "show":
+            print(command_line(service))
+            return 0
+    except DockerError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    print("liminal-login server up | down | status | logs | pull | exec -- CMD | show", file=sys.stderr)
+    return 2
+
+
 def cmd_init(args) -> int:
     """`init SCOPE [--title T] [--serves a,b] [--port P] [--members any] [--cfg PATH] [--force]`: the login's file,
     liminal-login.cfg (the user, 2026-11-06: "have like a setup.cfg for the login, and then like other web
@@ -307,7 +366,9 @@ def mail_check(args) -> int:
         return 2
     mailer = Mailer(log=print, cfg=scope.mail_variables())
     mailbox = Mailbox(log=print, cfg=scope.imap_variables())
-    checks = mailcheck.run(scope, mailer, mailbox, to=args.to or (), wait=args.wait, log=print)
+    service = scope.service(_root(args))
+    checks = mailcheck.run(scope, mailer, mailbox, to=args.to or (), wait=args.wait, log=print,
+                           docker=scope.docker(log=print) if service is not None else None, service=service)
     print(mailcheck.report(checks))
     return 0 if mailcheck.passed(checks) else 1
 
@@ -366,6 +427,11 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--cfg", default=None, help="where to write it (the folder itself for file:, the workspace for a domain)")
     i.add_argument("--force", action="store_true", help="replace a file that is there")
     i.set_defaults(func=cmd_init)
+    sv = sub.add_parser("server", help="the mail server container the login file declares under [server]: up, down, status, logs, pull, exec -- CMD, show")
+    sv.add_argument("address", nargs="?", default="status", metavar="what", help="up | down | status | logs | pull | exec | show")
+    sv.add_argument("--tail", type=int, default=100, help="logs: how many last lines")
+    sv.add_argument("command", nargs="*", help="exec: the command inside the container, after --")
+    sv.set_defaults(func=cmd_server)
     st = sub.add_parser("status", help="the users here, whether the page answers, the mail account, what the login is tied to")
     st.add_argument("--port", type=int, default=None)
     st.set_defaults(func=cmd_status)
@@ -389,7 +455,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
-    commands = ("serve", "status", "user", "mail", "init")
+    commands = ("serve", "status", "user", "mail", "init", "server")
     if not any(a in commands for a in argv) and not any(a in ("-h", "--help", "--version") for a in argv):
         i = 0  # `liminal-login [--for X] [--dir Y] [serve's options]`: serve, after the options every command takes
         while i < len(argv) and argv[i] in ("--dir", "--for", "--cfg"):

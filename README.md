@@ -67,6 +67,14 @@ given (yours; one on another server), each with the server's own answer, and rea
 file's `[imap]` section, asked by `mail setup`) until its own message is there. The mail server, your own
 container or a relay, carries everything beyond the local domain; the login only hands it the messages.
 
+The mail server itself can be a container the file declares under `[server]` (`image = foxcpp/maddy:latest`,
+say, with its `ports`, `volumes` such as `./mail:/data` under the login's data, `env_NAME = value` for its
+environment, and a `context` when it runs on another machine's Docker, a VPS over SSH: `docker context
+create vps --docker host=ssh://user@vps`). `liminal-login server up` makes or starts it, `down` stops it
+with its data kept, `status`, `logs`, `pull`, `exec -- CMD` (a command inside it, `maddy creds create
+admin@...`), `show` (the docker run line); `mail check` reports the container first. The framework's
+driver is `liminal_libs.docker`, over the docker command alone.
+
 `liminal-login init file:///... | https://domain [--title T] [--serves charts,integrator] [--port P] [--admin A]` writes
 the file (a local one into the folder itself, a domain's into the workspace); `liminal-login --cfg PATH`
 or `LIMINAL_LOGIN_CFG` names it, else every app finds `liminal-login.cfg` in the workspace, in the working

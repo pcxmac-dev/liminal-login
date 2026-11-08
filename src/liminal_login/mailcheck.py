@@ -29,13 +29,26 @@ class Check:
         return "ok" if self.ok else ("skipped" if self.ok is None else "FAILED")
 
 
-def run(scope, mailer, mailbox, to=(), wait: float = 60.0, log=print, sleep=time.sleep) -> list[Check]:
+def run(scope, mailer, mailbox, to=(), wait: float = 60.0, log=print, sleep=time.sleep, docker=None, service=None) -> list[Check]:
     """The checks, in order; `to`: the addresses to send to besides the admin account (yours, one at another
-    server); `wait`: how long to look for the message to the admin account in its mailbox."""
+    server); `wait`: how long to look for the message to the admin account in its mailbox; `docker` and
+    `service`: the mail server container the file declares, checked first when there is one."""
     out: list[Check] = []
     if scope.kind != "domain":
         return [Check("the login", False, f"a local login ({scope.label}) sends no email: nothing to check")]
     admin, host = scope.admin_address, scope.admin_host
+    if service is not None and docker is not None:  # the container that is the mail server
+        from liminal_libs.docker import DockerError
+
+        try:
+            if not docker.available():
+                out.append(Check(f"the container {service.name}", False, f"Docker is not available on {docker.where}: " + docker.describe().get("problem", "not installed")))
+            else:
+                c = docker.container(service.name)
+                out.append(Check(f"the container {service.name}", bool(c and c.running),
+                                 (f"{c.state} ({c.status}) on {docker.where}, health {docker.health(c.name)}" if c else f"not made yet on {docker.where}: `liminal-login server up`")))
+        except DockerError as e:
+            out.append(Check(f"the container {service.name}", False, str(e)))
     addresses = dns.addresses(host)
     exchangers = dns.mx_records(host)
     valid = bool(addresses) or bool(exchangers)

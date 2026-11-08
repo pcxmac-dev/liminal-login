@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0 (2026-11-07)
+
+The mail server as a container (the user: "i want to integrate docker with the liminal framework"): the
+login file's `[server]` section (image, name, context or host, hostname, ports, volumes, env_NAME, restart,
+command) is the container, run through liminal-libs 1.18.0's docker driver: `liminal-login server up | down |
+status | logs | pull | exec -- CMD | show`; `mail check` reports the container first. The library at 1.18.0
+or later.
+
 ## 0.10.0 (2026-11-06)
 
 The admin account of a domain's login, and the server checked with it (the user: "the login-app would need
