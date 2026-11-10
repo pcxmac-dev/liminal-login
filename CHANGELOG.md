@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.0 (2026-11-10)
+
+Touch screens and the on-screen keyboard (the user: "let's do an update. I want to support touch as well as mouse
+clicking on the interface ... We'll make sure it works across all apps"; "Support for virtual keyboard on tablets and
+phones"), on liminal-libs 1.42.0's touch.js, which the page loads right after theme.js, and the viewport's
+`interactive-widget=resizes-content` (Chrome on Android makes room above its keyboard). A mouse and a hardware keyboard
+work as before. Every field calls up its keyboard: account names typed as they are (no capitals, no corrections; the
+sign-in's with @ at hand for an email), an email the email keyboard, the mailed code the digits pad (and the code a
+phone offers from its messages), a password as a password (a new one as new), a pair's name as it is, its label as free
+text, its value a secret kept out of password managers. The keyboard's Enter says Next and moves to the next field until
+a form's last field, whose Go, Send or Done sends the form. No keyboard pops up by itself on a phone or a tablet: a form
+opens with no field focused until one is tapped (a mouse or a keyboard still finds the first field focused), and Add for
+a pair a plugin asks for brings the Value field into view. A long press on the reveal and remove buttons shows what they
+do, and screen readers name them; targets are about 40 px and fields' words 16 px on a touch screen (liminal.css); on a
+phone the page is one column and the account's head wraps. The library at 1.42.0 or later.
+
 ## 0.11.1 (2026-11-07)
 
 The page is painted in the UI's theme (the user: "add a preferences plugin for the 'UI' and add the different

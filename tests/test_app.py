@@ -203,3 +203,50 @@ def test_the_login_folder_is_the_data_folders_unless_said(monkeypatch, tmp_path)
     assert login_dir() == data_dir() / "login"  # the workspace's store/data, or ~/LiminalData without one (CI)
     monkeypatch.setenv("LIMINAL_LOGIN_PORT", "8800")
     assert LoginApp(tmp_path / "x", log=lambda m: None).port() == 8800
+
+
+def test_the_page_answers_a_finger_and_an_on_screen_keyboard(served):
+    """0.12.0 (the user, 2026-11-10: "let's do an update. I want to support touch as well as mouse clicking on the
+    interface ... We'll make sure it works across all apps"; "Support for virtual keyboard on tablets and phones"): the
+    library's touch.js right after theme.js and before the scripts that use it, the keyboard's room in the viewport;
+    every field's keyboard (account names typed as they are, emails, the mailed code, a password current or new, a
+    pair's name as it is, its label as free text, its value a secret kept out of password managers), each attribute
+    once; Next until a form's last field; no field focused by code after a finger's tap; the pairs' icon buttons named.
+    No JavaScript runs here: what the page is drawn with."""
+    import re
+
+    app, port, lines = served
+    body = _call(port, "GET", "/")[1]
+    assert b'<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">' in body
+    at = {name: body.index(f'src="{name}"'.encode()) for name in ("theme.js", "touch.js", "icons.js", "login.js")}
+    assert body.count(b'src="touch.js"') == 1 and at["theme.js"] < at["touch.js"] < min(at["icons.js"], at["login.js"])
+    status, touch, r = _call(port, "GET", "/touch.js")
+    assert status == 200 and b"window.LiminalTouch" in touch and "javascript" in r.getheader("Content-Type")
+    page = _call(port, "GET", "/login.js")[1].decode("utf-8")
+    for field in ("""<input id="name" type="text" ${kb('username', { inputmode: 'email' })} maxlength="254" required>""",
+                  """<input id="password" type="password" ${kb('password')} required minlength="8">""",
+                  """<input id="email" type="email" ${kb('email')} maxlength="254">""",
+                  """<input id="password" type="password" ${kb('password', NEW_NEXT)} required minlength="8">""",
+                  """<input id="again" type="password" ${kb('password', NEW_DONE)} required minlength="8">""",
+                  """<input id="address" type="email" ${kb('email', 'send')} maxlength="254" required>""",
+                  """<input id="digits" type="text" class="mono" ${kb('code')} placeholder="123456" maxlength="8" required>""",
+                  """<input id="pName" type="text" list="knownNames" ${kb('plain', 'next')} placeholder="massive-api-key\"""",
+                  """<input id="pLabel" type="text" ${kb('text', 'next')} placeholder""",
+                  """<input id="pValue" type="password" ${kb('secret')} maxlength="4096" required>""",
+                  """<input id="old" type="password" ${kb('password', 'next')} required>""",
+                  """<input id="new" type="password" ${kb('password', NEW_DONE)} required minlength="8">"""):
+        assert field in page, field
+    assert page.count("${kb('username')}") == 2  # the first user's name and a sign-up's: typed as they are, Next
+    # each attribute once: a kind's autocomplete and inputmode are its own, never written beside it
+    inputs = re.findall(r"<input [^>]*>", page)
+    assert inputs and not [i for i in inputs if "${kb(" in i and ("autocomplete=" in i or "inputmode=" in i)]
+    assert "NEW_NEXT = { autocomplete: 'new-password', enterkeyhint: 'next' }" in page
+    # a form's next field on a phone keyboard's Next (a hardware keyboard's Enter sends the form, as before)
+    assert "c.getAttribute('enterkeyhint') !== 'next'" in page and "!fingered()) return;" in page
+    # no keyboard called up unasked: every focus by code goes through touch.js's autofocus
+    for focus in ("focusFirst($('name'))", "focusFirst($('address'))", "focusFirst($('digits'))", "if (!focusFirst($('pValue')))"):
+        assert focus in page, focus
+    assert not re.search(r"\$\('\w+'\)\.focus\(\)", page) and "T.autofocus(el)" in page
+    assert 'aria-label="Reveal the value of ${esc(p.name)}"' in page and 'aria-label="Remove the pair ${esc(p.name)}"' in page
+    css = _call(port, "GET", "/login.css")[1].decode("utf-8")
+    assert ":hover" not in css and "@media (max-width: 700px) { .user-head { flex-wrap: wrap; } }" in css

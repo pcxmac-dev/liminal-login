@@ -6,6 +6,10 @@
 // a form to add one, a password change, sign out. The API paths are relative, so the page works under
 // another app's prefix too (the charts app's /login/); inside another app's page (?embedded=1) the
 // rail is hidden and the parent page is told when you sign in or out.
+// 0.12.0 (the user, 2026-11-10: "let's do an update. I want to support touch as well as mouse clicking on the
+// interface ... We'll make sure it works across all apps"; "Support for virtual keyboard on tablets and phones"): every
+// field calls up its keyboard (the library's touch.js), its Enter says Next until the last field, and no keyboard is
+// called up before a field is tapped. A mouse and a hardware keyboard work as they did.
 (() => {
   'use strict';
 
@@ -15,6 +19,25 @@
   const esc = window.LiminalIcons.esc;
   const icon = window.LiminalIcons.icon;
   const main = $('main');
+  // a finger, a pen and the on-screen keyboard (liminal-libs 1.42.0's touch.js, loaded before this file); without it, the
+  // fields as a mouse and a keyboard had them
+  const T = window.LiminalTouch || null;
+  const AS_BEFORE = { username: 'username', email: 'email', password: 'current-password', code: 'one-time-code', secret: 'off', plain: 'off' };
+  function kb(kind, more) {  // a field's keyboard, as attributes (the kinds: LiminalTouch.KEYBOARDS)
+    if (T) return T.keyboard(kind, more);
+    const ac = (more && typeof more === 'object' && more.autocomplete) || AS_BEFORE[kind];
+    return `${ac ? `autocomplete="${ac}"` : ''}${kind === 'code' ? ' inputmode="numeric"' : ''}`;
+  }
+  const NEW_NEXT = { autocomplete: 'new-password', enterkeyhint: 'next' }, NEW_DONE = { autocomplete: 'new-password', enterkeyhint: 'done' };  // a password chosen
+  const fingered = () => !!T && (T.lastInput === 'touch' || T.lastInput === 'pen');  // the user's last move was a finger's
+  // a form's first field focused for a mouse or a keyboard; after a finger's tap (and on a phone or a tablet before any
+  // move) left for the user to tap, so the keyboard does not cover the card unasked
+  function focusFirst(el) {
+    if (!el) return false;
+    if (T) return T.autofocus(el);
+    el.focus();
+    return true;
+  }
   const embedded = new URLSearchParams(location.search).get('embedded') === '1';
   if (embedded) document.body.classList.add('embedded');
   $('railUser').innerHTML = icon('user', 30);
@@ -67,9 +90,9 @@
         : 'Your account name (or email) and password open your keys and accounts.'}</p>
       ${first ? '' : `<form id="signin">
         <div class="field"><label for="name">Account name or email</label>
-          <input id="name" type="text" autocomplete="username" maxlength="254" required></div>
+          <input id="name" type="text" ${kb('username', { inputmode: 'email' })} maxlength="254" required></div>
         <div class="field"><label for="password">Password</label>
-          <input id="password" type="password" autocomplete="current-password" required minlength="8"></div>
+          <input id="password" type="password" ${kb('password')} required minlength="8"></div>
         <div class="row end"><button type="submit" class="accent">Sign in</button></div>
         <p id="err" class="error"></p></form>`}
       <p class="muted">${mail ? `<button type="button" id="toSignup" class="${first ? 'accent' : ''}">Sign up</button>`
@@ -84,7 +107,7 @@
         try { await api('POST', 'api/sign-in', { name: $('name').value, password: $('password').value }); $('password').value = ''; render(); }
         catch (err) { $('err').textContent = err.message; }
       });
-      $('name').focus();
+      focusFirst($('name'));
     }
     if (mail) $('toSignup').addEventListener('click', () => emailForm(first));
   }
@@ -96,10 +119,10 @@
       <h1>Create the first user</h1>
       <p class="muted">${esc(forTitle)} has no users yet: the first one is yours. The password unlocks your keys and accounts; it is never stored. (Email sending is not set up here, so no code is needed for the first user.)</p>
       <form id="first">
-        <div class="field"><label for="name">Account name</label><input id="name" type="text" autocomplete="username" maxlength="40" required></div>
-        <div class="field"><label for="email">Email (optional)</label><input id="email" type="email" autocomplete="email" maxlength="254"></div>
-        <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="new-password" required minlength="8"></div>
-        <div class="field"><label for="again">Password, again</label><input id="again" type="password" autocomplete="new-password" required minlength="8"></div>
+        <div class="field"><label for="name">Account name</label><input id="name" type="text" ${kb('username')} maxlength="40" required></div>
+        <div class="field"><label for="email">Email (optional)</label><input id="email" type="email" ${kb('email')} maxlength="254"></div>
+        <div class="field"><label for="password">Password</label><input id="password" type="password" ${kb('password', NEW_NEXT)} required minlength="8"></div>
+        <div class="field"><label for="again">Password, again</label><input id="again" type="password" ${kb('password', NEW_DONE)} required minlength="8"></div>
         <div class="row end"><button type="submit" class="accent">Create and sign in</button></div>
         <p id="err" class="error"></p>
       </form></div>`;
@@ -114,7 +137,7 @@
         render();
       } catch (err) { $('err').textContent = err.message; }
     });
-    $('name').focus();
+    focusFirst($('name'));
   }
 
   // step 1: the email
@@ -125,7 +148,7 @@
       <p class="muted">Your email first: a six-digit code goes to it ${mail.direct ? 'straight through its own mail server' : `through <b>${esc(mail.host || 'the mail account set here')}</b>`}${mail.sender ? ` as ${esc(mail.sender)}` : ''}. Then you choose your account name and password.</p>
       ${mail.lastSent ? `<p class="muted">The last code went out at ${esc(when(mail.lastSent.at))}: the server answered <span class="mono">${esc(mail.lastSent.code)} ${esc(mail.lastSent.reply)}</span>.</p>` : ''}
       <form id="email">
-        <div class="field"><label for="address">Email</label><input id="address" type="email" autocomplete="email" maxlength="254" required></div>
+        <div class="field"><label for="address">Email</label><input id="address" type="email" ${kb('email', 'send')} maxlength="254" required></div>
         <div class="row end">${first ? '' : '<button type="button" id="back">Back</button>'}<button type="submit" class="accent">Send my code</button></div>
         <p id="err" class="error"></p>
       </form></div>`;
@@ -137,7 +160,7 @@
       catch (err) { $('err').textContent = err.message; }
     });
     if (!first) $('back').addEventListener('click', () => render());
-    $('address').focus();
+    focusFirst($('address'));
   }
 
   // step 2: the code from the email
@@ -148,7 +171,7 @@
       <p class="muted">A six-digit code went to <b>${esc(signup.email)}</b>. Type it here within 15 minutes (look in spam too).</p>
       ${signup.sent ? `<p class="muted receipt">${esc(signup.sent.host)} took the message at ${esc(when(signup.sent.at))} and answered <span class="mono">${esc(signup.sent.code)} ${esc(signup.sent.reply)}</span>${signup.sent.messageId ? `; message id <span class="mono">${esc(signup.sent.messageId)}</span>` : ''}.</p>` : ''}
       <form id="code">
-        <div class="field"><label for="digits">Code</label><input id="digits" type="text" class="mono" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" maxlength="8" required></div>
+        <div class="field"><label for="digits">Code</label><input id="digits" type="text" class="mono" ${kb('code')} placeholder="123456" maxlength="8" required></div>
         <div class="row end"><button type="button" id="resend">Send it again</button><button type="button" id="cancel">Start over</button><button type="submit" class="accent">Continue</button></div>
         <p id="err" class="error"></p><p id="note" class="muted"></p>
       </form></div>`;
@@ -168,7 +191,7 @@
       catch (err) { $('err').textContent = err.message; }
     });
     $('cancel').addEventListener('click', () => { signup = null; render(); });
-    $('digits').focus();
+    focusFirst($('digits'));
   }
 
   // step 3: the account name and the password
@@ -178,9 +201,9 @@
       <h1>Your account</h1>
       <p class="muted"><b>${esc(signup.email)}</b> is verified. Choose your account name and password; the password unlocks your keys and accounts and is never stored.</p>
       <form id="details">
-        <div class="field"><label for="name">Account name</label><input id="name" type="text" autocomplete="username" maxlength="40" required></div>
-        <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="new-password" required minlength="8"></div>
-        <div class="field"><label for="again">Password, again</label><input id="again" type="password" autocomplete="new-password" required minlength="8"></div>
+        <div class="field"><label for="name">Account name</label><input id="name" type="text" ${kb('username')} maxlength="40" required></div>
+        <div class="field"><label for="password">Password</label><input id="password" type="password" ${kb('password', NEW_NEXT)} required minlength="8"></div>
+        <div class="field"><label for="again">Password, again</label><input id="again" type="password" ${kb('password', NEW_DONE)} required minlength="8"></div>
         <div class="row end"><button type="button" id="cancel">Start over</button><button type="submit" class="accent">Create my account</button></div>
         <p id="err" class="error"></p>
       </form></div>`;
@@ -196,7 +219,7 @@
       } catch (err) { $('err').textContent = err.message; if (/start the sign-up again|start it again/.test(err.message)) signup = null; }
     });
     $('cancel').addEventListener('click', () => { signup = null; render(); });
-    $('name').focus();
+    focusFirst($('name'));
   }
 
   // -- signed in ---------------------------------------------------------------------------------
@@ -222,8 +245,8 @@
         <td class="mono">${esc(p.name)}</td><td><span class="kind">${esc(p.kind)}</span></td><td>${esc(p.label)}</td>
         <td class="muted">${esc(when(p.updatedAt))}</td>
         <td class="value"><span class="masked">••••••••</span></td>
-        <td class="tools"><button type="button" class="reveal" title="Reveal the value here">${icon('eye', 16)}</button>
-          <button type="button" class="remove danger" title="Remove this pair">${icon('trash', 16)}</button></td></tr>`).join('');
+        <td class="tools"><button type="button" class="reveal" title="Reveal the value here" aria-label="Reveal the value of ${esc(p.name)}">${icon('eye', 16)}</button>
+          <button type="button" class="remove danger" title="Remove this pair" aria-label="Remove the pair ${esc(p.name)}">${icon('trash', 16)}</button></td></tr>`).join('');
     return `<h2>Your keys and accounts</h2><table class="list pairs"><thead><tr><th>Name</th><th>Kind</th><th>Label</th><th>Updated</th><th>Value</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
@@ -241,18 +264,18 @@
   function addForm(known) {
     const options = known.filter((k) => !k.set).map((k) => `<option value="${esc(k.name)}">${esc(k.title || k.plugin)}: ${esc(k.label)}</option>`).join('');
     return `<form id="add" class="add-pair">
-      <div class="field"><label for="pName">Name</label><input id="pName" type="text" list="knownNames" placeholder="massive-api-key" maxlength="64" required pattern="[a-z0-9][a-z0-9._-]*"><datalist id="knownNames">${options}</datalist></div>
+      <div class="field"><label for="pName">Name</label><input id="pName" type="text" list="knownNames" ${kb('plain', 'next')} placeholder="massive-api-key" maxlength="64" required pattern="[a-z0-9][a-z0-9._-]*"><datalist id="knownNames">${options}</datalist></div>
       <div class="field"><label for="pKind">Kind</label><select id="pKind">${KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}</select></div>
-      <div class="field"><label for="pLabel">Label</label><input id="pLabel" type="text" placeholder="Massive, the paid plan" maxlength="80"></div>
-      <div class="field"><label for="pValue">Value</label><input id="pValue" type="password" autocomplete="off" maxlength="4096" required></div>
+      <div class="field"><label for="pLabel">Label</label><input id="pLabel" type="text" ${kb('text', 'next')} placeholder="Massive, the paid plan" maxlength="80"></div>
+      <div class="field"><label for="pValue">Value</label><input id="pValue" type="password" ${kb('secret')} maxlength="4096" required></div>
       <button type="submit" class="accent">Add</button>
       <p id="addErr" class="error" style="grid-column: 1 / -1"></p></form>`;
   }
 
   function changeForm() {
     return `<details class="change"><summary>Change your password</summary><form id="change">
-      <div class="field"><label for="old">Current password</label><input id="old" type="password" autocomplete="current-password" required></div>
-      <div class="field"><label for="new">New password</label><input id="new" type="password" autocomplete="new-password" required minlength="8"></div>
+      <div class="field"><label for="old">Current password</label><input id="old" type="password" ${kb('password', 'next')} required></div>
+      <div class="field"><label for="new">New password</label><input id="new" type="password" ${kb('password', NEW_DONE)} required minlength="8"></div>
       <div class="row end"><button type="submit">Change</button></div><p id="chErr" class="error"></p></form></details>`;
   }
 
@@ -272,7 +295,7 @@
     });
     main.querySelectorAll('button.use').forEach((b) => b.addEventListener('click', () => {
       $('pName').value = b.dataset.name; $('pKind').value = b.dataset.kind; $('pLabel').value = b.dataset.label;
-      $('pValue').focus();
+      if (!focusFirst($('pValue'))) $('pValue').scrollIntoView({ block: 'nearest' });  // after a tap: in view, its keyboard up once it is tapped
     }));
     $('add').addEventListener('submit', async (e) => {
       e.preventDefault(); $('addErr').textContent = '';
@@ -288,6 +311,20 @@
       catch (err) { $('chErr').textContent = err.message; }
     });
   }
+
+  // an on-screen keyboard's Next: the form's next field, the form not sent yet (Safari sends it otherwise; Chrome on
+  // Android moves on by itself); the last field's Go, Send or Done sends it, and a hardware keyboard's Enter sends it
+  // from any field, as before
+  main.addEventListener('keydown', (e) => {
+    const c = e.target;
+    if (e.key !== 'Enter' || e.isComposing || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || !fingered()) return;
+    if (!c.matches || !c.matches('form input') || c.getAttribute('enterkeyhint') !== 'next' || !c.form) return;
+    const fields = [...c.form.elements].filter((x) => x.matches('input, select, textarea') && !x.disabled && x.type !== 'hidden' && x.offsetParent !== null);
+    const next = fields[fields.indexOf(c) + 1];
+    if (!next) return;
+    e.preventDefault();
+    next.focus({ preventScroll: true });  // touch.js brings it into view above the keyboard
+  });
 
   render();
 })();

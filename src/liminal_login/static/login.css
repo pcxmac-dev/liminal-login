@@ -17,3 +17,6 @@ details.change { margin-top: 14px; }
 details.change summary { cursor: pointer; color: var(--muted); }
 .ico { vertical-align: -3px; }
 @media (max-width: 720px) { .add-pair { grid-template-columns: 1fr 1fr; } }
+/* 0.12.0, a phone (liminal.css makes the page one column scrolling as a whole below 700 px): the account's head wraps,
+   Sign out on a line of its own at the right; the fields and buttons at a finger's size on any touch screen (liminal.css) */
+@media (max-width: 700px) { .user-head { flex-wrap: wrap; } }
