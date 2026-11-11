@@ -1,7 +1,8 @@
 """A sign-up: the email, the six-digit code mailed to it and typed back, then the account name and
 the password (users.py's sign-ups, app.py's routes): the code is kept as a hash and never logged, five
 tries, fifteen minutes, a new one on request, the first account too; without a mail account the page
-falls back to the first-user form and says what to set; each login serves one app, its namespace."""
+falls back to the first-user form and says what to set; on its own the login knows no app, and an app that
+inherits it keeps its users apart."""
 from __future__ import annotations
 
 import json
@@ -13,10 +14,10 @@ import pytest
 
 from liminal_libs.web import WRITE_HEADER
 from liminal_login import crypto
-from liminal_login.app import LoginApp, namespace_of
+from liminal_login.app import LoginApp, superclass_of
 from liminal_login.users import UserStore
 
-COOKIE = "liminal_login_charts"
+COOKIE = "liminal_login"  # the login's own: on its own, no app inherits it
 
 
 def _call(port, method, path, body=None, headers=None, token=None):
@@ -132,9 +133,9 @@ def test_the_first_account_is_made_with_a_code_when_mail_is_set_up(served_mail):
     app, port, lines, mailer = served_mail
     st = _call(port, "GET", "/api/status")[1]
     assert st["users"] == 0 and st["signup"]["email"] is True and st["signup"]["host"] == "smtp.example.test"
-    assert st["for"] == "charts" and st["forTitle"] == "Liminal Charts" and "password" not in json.dumps(st["signup"])
-    # a domain's login: its users at the domain, its folders under the domain's
-    assert st["scope"]["kind"] == "domain" and st["scope"]["domain"] == "example.test" and app.dir == app.root / "example.test" / "charts"
+    assert st["for"] is None and st["forTitle"] == "Liminal" and "password" not in json.dumps(st["signup"])
+    # a domain's login: its users at the domain, in the domain's folder
+    assert st["scope"]["kind"] == "domain" and st["scope"]["domain"] == "example.test" and app.dir == app.root / "example.test"
     status, data, _ = _call(port, "POST", "/api/signup", {"email": "ada@elsewhere.test"})
     assert status == 400 and "example.test" in data["error"]
     # the plain first-user route is closed: a code is the way
@@ -149,7 +150,7 @@ def test_the_first_account_is_made_with_a_code_when_mail_is_set_up(served_mail):
     assert any("answered 250 2.0.0 OK queued as fake-1" in m for m in lines)
     to, subject, text = mailer.sent[-1]
     code = mailer.last_code()
-    assert to == "ada@example.test" and subject == "Your Liminal Charts code" and "Liminal Charts" in text and code in text
+    assert to == "ada@example.test" and subject == "Your Liminal code" and "a Liminal account" in text and code in text
     assert not any(code in m for m in lines)
     assert any("sign-up began for a***@example.test" in m for m in lines)
     # the code, wrong then right; then the name and the password: made, verified, signed in at once
@@ -165,7 +166,7 @@ def test_the_first_account_is_made_with_a_code_when_mail_is_set_up(served_mail):
     assert status == 201 and data["user"]["name"] == "Ada" and data["user"]["verified"] is True and data["token"]
     assert r.getheader("Set-Cookie").startswith(f"{COOKIE}={data['token']}")
     me = _call(port, "GET", "/api/me", token=data["token"])[1]
-    assert me["email"] == "ada@example.test" and me["verified"] is True and me["for"] == "charts"
+    assert me["email"] == "ada@example.test" and me["verified"] is True and me["for"] is None
     assert _call(port, "GET", "/api/status")[1]["users"] == 1
     assert _call(port, "POST", "/api/sign-in", {"name": "ada@example.test", "password": "correct horse battery"})[0] == 200
     # a new code on request (not twice in a minute), and the resend of nothing
@@ -194,29 +195,45 @@ def test_without_a_mail_account_the_first_user_is_made_on_the_page_and_a_signup_
     assert status == 201 and data["email"] == "ada@example.test" and data["verified"] is False
 
 
-def test_each_login_serves_one_app_in_its_own_namespace(folder, monkeypatch):
-    charts = LoginApp(folder, log=lambda m: None, failure_delay=0, namespace="charts")
-    integrator = LoginApp(folder, log=lambda m: None, failure_delay=0, namespace="integrator")
+def test_on_its_own_the_login_knows_no_app_and_an_app_that_inherits_it_keeps_its_users_apart(folder, monkeypatch):
+    """0.13.0 (the user, 2026-11-10: "the log-in app should not point to platform, integrator or charts, it should be
+    standalone"; "when its inherited it can point to it's superclass, charts, platform, or integrator"): on its own, its
+    users in its own folder under its own cookie, the page naming it by its scope; inherited, the superclass's users in a
+    folder of their own under their own cookie, named as that app said. No app is known here by name."""
+    own = LoginApp(folder, log=lambda m: None, failure_delay=0)
+    charts = LoginApp(folder, log=lambda m: None, failure_delay=0, superclass="charts")
+    platform = LoginApp(folder, log=lambda m: None, failure_delay=0,
+                        superclass=superclass_of("platform", "The Platform", "http://127.0.0.1:8775/"))
     try:
-        assert charts.dir == folder / "charts" and integrator.dir == folder / "integrator"
-        assert charts.PORT == 8795 and integrator.PORT == 8796 and charts.port() == 8795 and integrator.port() == 8796
-        assert charts.cookie_name == "liminal_login_charts" and integrator.cookie_name == "liminal_login_integrator"
-        assert charts.TITLE == "Login: Liminal Charts" and integrator.title_for == "Liminal Integrator"
-        assert charts.describe()["for"] == "charts" and integrator.tray().title == "Login: Liminal Integrator"
-        charts.users.create("Ada", "correct horse battery")
-        assert charts.users.count() == 1 and integrator.users.count() == 0  # the same name is free in the other
-        integrator.users.create("Ada", "another password")
-        assert integrator.users.verify("Ada", "correct horse battery") is None
+        assert own.superclass is None and own.dir == folder and own.cookie_name == "liminal_login" and own.TITLE == "Login"
+        assert own.title_for == "Liminal" and own.describe()["for"] is None and own.describe()["superclass"] is None
+        assert charts.dir == folder / "charts" and charts.cookie_name == "liminal_login_charts" and charts.TITLE == "Login: Liminal Charts"
+        assert platform.dir == folder / "platform" and platform.title_for == "The Platform" and platform.tray().title == "Login: The Platform"
+        assert platform.describe()["superclass"] == {"name": "platform", "title": "The Platform", "url": "http://127.0.0.1:8775"}
+        assert own.port() == charts.port() == platform.port() == 8795  # the app that starts it says its port (--port)
+        own.users.create("Ada", "correct horse battery")
+        assert own.users.count() == 1 and charts.users.count() == 0 and platform.users.count() == 0  # apart
+        charts.users.create("Ada", "another password")  # the same name is free in another
+        assert charts.users.verify("Ada", "correct horse battery") is None
+        # the superclass as the app that starts the login says it, in its environment (liminal_libs.apps.inherited_by)
         monkeypatch.setenv("LIMINAL_LOGIN_FOR", "integrator")
-        assert namespace_of() == "integrator" and LoginApp(folder, log=lambda m: None).namespace == "integrator"
-        with pytest.raises(ValueError):
-            namespace_of("Not A Name!")
-        other = LoginApp(folder, log=lambda m: None, namespace="platform")
-        assert other.PORT == 8795 and other.title_for == "Liminal Platform" and other.dir == folder / "platform"
-        other.close()
+        monkeypatch.setenv("LIMINAL_LOGIN_FOR_URL", "http://127.0.0.1:8785/")
+        sup = superclass_of()
+        assert (sup.name, sup.title, sup.url) == ("integrator", "Liminal Integrator", "http://127.0.0.1:8785")
+        inherited = LoginApp(folder, log=lambda m: None)
+        assert inherited.namespace == "integrator" and inherited.dir == folder / "integrator"
+        inherited.close()
+        for bad in ("Not A Name!", "users", "logs", "dkim"):  # a short name, never one of the login's own folders
+            with pytest.raises(ValueError):
+                superclass_of(bad)
+        with pytest.raises(ValueError, match="http"):
+            superclass_of("charts", url="file:///C:/elsewhere")
+        monkeypatch.delenv("LIMINAL_LOGIN_FOR")
+        assert superclass_of() is None
     finally:
+        own.close()
         charts.close()
-        integrator.close()
+        platform.close()
 
 
 def test_a_domain_login_takes_signups_only_with_an_email_server(folder, monkeypatch):
@@ -230,7 +247,7 @@ def test_a_domain_login_takes_signups_only_with_an_email_server(folder, monkeypa
 
     app = LoginApp(folder, log=lambda m: None, failure_delay=0, mailer=FakeMailer(configured=False), scope=Scope.for_domain("example.test"))
     try:
-        assert app.describe()["scope"]["kind"] == "domain" and app.dir == folder / "example.test" / "charts"
+        assert app.describe()["scope"]["kind"] == "domain" and app.dir == folder / "example.test"
         assert not app.signup_open() and "not set up" in app.signup_closed_why()
         app.mailer.settings = MailSettings(host="direct", sender="login@example.test")  # the domain's own mail record
         monkeypatch.setattr(app_mod, "mx_records", lambda d: [] if d == "example.test" else None)
@@ -245,7 +262,7 @@ def test_a_domain_login_takes_signups_only_with_an_email_server(folder, monkeypa
         local = LoginApp(folder, log=lambda m: None, mailer=FakeMailer(configured=True))
         try:
             assert local.describe()["scope"]["kind"] == "local" and not local.signup_open() and "local" in local.signup_closed_why()
-            assert local.dir == folder / "charts"
+            assert local.dir == folder
         finally:
             local.close()
     finally:

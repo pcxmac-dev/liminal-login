@@ -14,7 +14,7 @@ infrastructure").
 pip install -e .
 liminal-login                      # the page at http://127.0.0.1:8795/ (LIMINAL_LOGIN_PORT)
 liminal-login serve --no-browser --port 8795
-liminal-login serve --no-browser --until-quiet   # what the charts app starts for itself: ends when no page is in touch
+liminal-login serve --no-browser --until-quiet   # what an app that inherits it starts: ends when no page is in touch
 liminal-login user add NAME        # a user from the command line (the password typed hidden)
 liminal-login user list
 liminal-login status
@@ -25,11 +25,15 @@ the code, then your account name and password. The first visit offers it; later 
 "Sign up" on the sign-in page; `user add` makes one from the command line without a code, and without a
 mail account the first user is made on the page without one.
 
-Each login instance serves one app, its users' namespace: `liminal-login --for charts` (the default,
-port 8795) or `--for integrator` (port 8796; LIMINAL_LOGIN_FOR), each with its own users' file, stores and
-cookie under `store/data/login/<for>/`. The users' file and the stores live in
-`store/data/login/` of the Liminal workspace (`liminal_libs.layout.data_dir()`), or wherever
-`LIMINAL_LOGIN_DIR` says; never in this repository.
+On its own the login knows no other app: its users, their stores and its cookie (`liminal_login`) are its
+own, and the page names it by its file's title. An app that inherits it (its superclass: charts, the
+platform, the integrator) says so when it starts it, with `liminal_libs.apps.inherited_by`: `LIMINAL_LOGIN_FOR`
+(its short name), `LIMINAL_LOGIN_FOR_TITLE` (how the page names it) and `LIMINAL_LOGIN_FOR_URL` (its address),
+or `--for`, `--for-title` and `--for-url` by hand. That app's users then live apart, in
+`store/data/login/<name>/` under the cookie `liminal_login_<name>`, and the pairs its plugins ask for are asked
+of it (`GET <its address>/api/login/pairs`, which every app of the library's frame answers from its plugins):
+the login reads no plugin itself. The users' files and the stores live in `store/data/login/` of the Liminal
+workspace (`liminal_libs.layout.data_dir()`), or wherever `LIMINAL_LOGIN_DIR` says; never in this repository.
 
 ## How a user's keys are kept
 
@@ -75,7 +79,7 @@ with its data kept, `status`, `logs`, `pull`, `exec -- CMD` (a command inside it
 admin@...`), `show` (the docker run line); `mail check` reports the container first. The framework's
 driver is `liminal_libs.docker`, over the docker command alone.
 
-`liminal-login init file:///... | https://domain [--title T] [--serves charts,integrator] [--port P] [--admin A]` writes
+`liminal-login init file:///... | https://domain [--title T] [--port P] [--admin A]` writes
 the file (a local one into the folder itself, a domain's into the workspace); `liminal-login --cfg PATH`
 or `LIMINAL_LOGIN_CFG` names it, else every app finds `liminal-login.cfg` in the workspace, in the working
 folder or one above it, or in the data folder's `login/`. The charts front starts the login with the file
@@ -148,8 +152,10 @@ Only from this machine, only from the app's own pages or a program here (every w
 apps' header). `GET /api/status`, `POST /api/users`, `POST /api/sign-in`, `POST /api/sign-out`,
 `POST /api/signup`, `POST /api/signup/resend`, `POST /api/signup/verify`, `POST /api/signup/complete`,
 `GET /api/me`, `PUT /api/me/password`, `GET /api/pairs`, `GET|PUT|DELETE /api/pairs/<name>`,
-`GET /api/tray`, `GET /api/app`.
+`GET /api/pairs/known` (the pairs an inheriting app's plugins ask for; none on its own), `GET /api/tray`,
+`GET /api/app`.
 
-Bound into the charts app (liminal-charts): its front serves this page under `/login/` and draws the user
-icon at the foot of its rail; nothing answering at `LIMINAL_LOGIN_URL` (8795), it starts this app for
-itself. Built on liminal-libs 1.9.0 (the apps' frame, outgoing mail, the bindings). Tests: `pytest -q`.
+Inherited today by the charts app (liminal-charts): its front serves this page under `/login/`, draws the
+user icon at the foot of its rail and, when nothing answers at `LIMINAL_LOGIN_URL` (8795), starts this app
+for itself as its superclass. Built on liminal-libs 1.43.0 (the apps' frame, outgoing mail, the bindings,
+`inherited_by` and `pairs_wanted`). Tests: `pytest -q`.

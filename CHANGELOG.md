@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.0 (2026-11-10)
+
+On its own the login knows no other app (the user: "the log-in app should not point to platform, integrator or charts,
+it should be standalone"; "when its inherited it can point to it's superclass, charts, platform, or integrator"):
+- Without an app inheriting it, its users live in its own folder (`store/data/login/`, a domain's in its folder there)
+  under its own cookie, `liminal_login`, the page names it by its file's title (Liminal) and the tray says Login. Before,
+  a login with no `--for` was the charts app's.
+- An app that inherits it, its superclass, says so when it starts it (liminal-libs 1.43.0's `inherited_by`:
+  `LIMINAL_LOGIN_FOR`, `LIMINAL_LOGIN_FOR_TITLE`, `LIMINAL_LOGIN_FOR_URL`; `--for`, `--for-title`, `--for-url` by hand).
+  Its users live apart in `<login folder>/<name>/` under `liminal_login_<name>`, as the charts app's always have, and
+  the page names it as it said. No app is known here by name: any short name is one, never `users`, `logs` or `dkim`.
+- The pairs a plugin asks for are no longer read from the plugin registry here: the superclass is asked (`GET <its
+  address>/api/login/pairs`, kept a minute, its rows kept as data only), and the page lists them under "Pairs the plugins
+  of <its title> ask for". On its own the page lists none; its examples name no plugin (`some-api-key`).
+- No default port per app: 8795 unless `LIMINAL_LOGIN_PORT`, the file or `--port` says (the app that starts it gives
+  the port it binds). `init` takes no `--serves`; `status` says "on its own" or "inherited by NAME". API 1.3: the
+  status's `for` is null on its own, and `superclass` says who inherits it.
+
 ## 0.12.1 (2026-11-10)
 
 Six things a look at the page found, mended (the user: "Yes, fix them"):

@@ -23,7 +23,7 @@ def test_a_user_is_added_with_the_password_typed_hidden(folder, monkeypatch, cap
     assert cli.main(["user", "add", "Bob"]) == 1
     assert cli.main(["user", "add"]) == 2
     assert cli.main(["user", "list"]) == 0 and "Ada: created" in capsys.readouterr().out
-    users = UserStore(folder / "charts" / "users.db")  # the charts namespace, the default
+    users = UserStore(folder / "users.db")  # the login's own users: no app inherits it here
     assert users.verify("Ada", "correct horse battery") is not None and users.count() == 1
     users.close()
     import socket
@@ -33,11 +33,11 @@ def test_a_user_is_added_with_the_password_typed_hidden(folder, monkeypatch, cap
         port = free.getsockname()[1]
     assert cli.main(["status", "--port", str(port)]) == 0
     out = capsys.readouterr().out
-    assert "login app for charts: 1 user(s)" in out and f"not running at port {port}" in out
-    # the integrator's namespace: its own users, cookie and port
+    assert "login app on its own: 1 user(s)" in out and f"not running at port {port}" in out
+    # an app that inherits it (--for): its users apart, in a folder of its own
     assert cli.main(["--for", "integrator", "user", "list"]) == 0 and "no users yet" in capsys.readouterr().out
-    assert cli.main(["--for", "integrator", "status"]) == 0 and "port 8796" in capsys.readouterr().out
-    assert (folder / "charts" / "users.db").is_file() and (folder / "integrator" / "users.db").is_file()
+    assert cli.main(["--for", "integrator", "status"]) == 0 and "login app inherited by integrator: 0 user(s)" in capsys.readouterr().out
+    assert (folder / "users.db").is_file() and (folder / "integrator" / "users.db").is_file()
 
 
 def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, monkeypatch, capsys):
@@ -138,10 +138,11 @@ def test_the_logins_file_ties_it_to_a_folder_or_a_domain(folder, tmp_path, monke
     # the user, 2026-11-06: "use a url regardless, file if local, domain w/ email server in mail record"
     project = tmp_path / "project"
     project.mkdir()
-    assert cli.main(["init", str(project), "--title", "My project", "--serves", "charts, integrator"]) == 0
+    assert cli.main(["init", str(project), "--title", "My project"]) == 0
     out = capsys.readouterr().out
     cfg = project / "liminal-login.cfg"
-    assert cfg.is_file() and "scope = file:///" in out and "A local login" in out and "serves = charts, integrator" in cfg.read_text()
+    # the file names no app the login serves (0.13.0): the app that inherits it says so when it starts it
+    assert cfg.is_file() and "scope = file:///" in out and "A local login" in out and "serves" not in cfg.read_text()
     assert cli.main(["init", str(project)]) == 1 and "there already" in capsys.readouterr().err
     assert cli.main(["--cfg", str(cfg), "status", "--port", "1"]) == 0 and f"local to {project.resolve()}" in capsys.readouterr().out
     domain_cfg = tmp_path / "domain.cfg"
@@ -155,7 +156,7 @@ def test_the_logins_file_ties_it_to_a_folder_or_a_domain(folder, tmp_path, monke
     typed = iter(["correct horse battery", "correct horse battery"])
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": next(typed))
     assert cli.main(["--cfg", str(domain_cfg), "user", "add", "Ada"]) == 0
-    assert (tmp_path / "data" / "login" / "example.test" / "charts" / "users.db").is_file()  # the domain's folder, then the app's
+    assert (tmp_path / "data" / "login" / "example.test" / "users.db").is_file()  # the domain's folder: the login's own users
     assert cli.main(["--cfg", str(domain_cfg), "status", "--port", "1"]) == 0
     out = capsys.readouterr().out
     assert "1 user(s)" in out and "@example.test" in out
@@ -288,10 +289,10 @@ def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):
     ran: list = []
     monkeypatch.setattr(LoginApp, "serve", lambda self, port=None, open_browser=False, stop=None, until_quiet=None:
                         ran.append((self.dir, port, open_browser, until_quiet)) or "url")
-    assert cli.main(["serve", "--no-browser", "--port", "8796"]) == 0 and ran == [(folder / "charts", 8796, False, None)]
-    assert cli.main(["--no-browser"]) == 0 and ran[-1] == (folder / "charts", 8795, False, None)  # `liminal-login` alone serves
-    assert cli.main([]) == 0 and ran[-1] == (folder / "charts", 8795, True, None)
-    assert cli.main(["--for", "integrator", "serve", "--no-browser"]) == 0 and ran[-1] == (folder / "integrator", 8796, False, None)
+    assert cli.main(["serve", "--no-browser", "--port", "8796"]) == 0 and ran == [(folder, 8796, False, None)]  # on its own
+    assert cli.main(["--no-browser"]) == 0 and ran[-1] == (folder, 8795, False, None)  # `liminal-login` alone serves
+    assert cli.main([]) == 0 and ran[-1] == (folder, 8795, True, None)
+    assert cli.main(["--for", "integrator", "serve", "--no-browser"]) == 0 and ran[-1] == (folder / "integrator", 8795, False, None)
     monkeypatch.setenv("LIMINAL_LOGIN_FOR", "integrator")
     assert cli.main(["serve", "--no-browser"]) == 0 and ran[-1][0] == folder / "integrator"
     monkeypatch.delenv("LIMINAL_LOGIN_FOR")

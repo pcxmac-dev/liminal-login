@@ -4,11 +4,14 @@ log out, gives me basic user information. When I click on the icon, when I'm log
 idea about the key value, database that's associated with my user, and the encrypted hash that is
 used to mask the values"; 2026-11-06: "sign up lets you put in an email and sends an email to an
 email account, which you then enter the 4-6 digit code back in to the signup prompt to generate a
-new user, password, etcc"; "each login-app instance is either tied to the chart app or the
-integrator app ... the context/name space under which the user exists is either for the integrator
-or the chart app"): an App of the library's frame (liminal_libs.apps) with the one master icon, the
-user, serving one app, its namespace (`for`: "charts" or "integrator"; LIMINAL_LOGIN_FOR), whose
-users live in their own folder, with their own cookie and default port. A sign-up begins with an
+new user, password, etcc"; 2026-11-10: "the log-in app should not point to platform, integrator or
+charts, it should be standalone"; "when its inherited it can point to it's superclass, charts, platform,
+or integrator"): an App of the library's frame (liminal_libs.apps) with the one master icon, the user.
+On its own it knows no other app: its users live in its own folder, under its own cookie, and the page
+names it by its scope's title. An app that inherits it (its superclass) says so when it starts it
+(liminal_libs.apps.inherited_by: LIMINAL_LOGIN_FOR and its title and address): that superclass's users
+then live in a folder of its own here, with its own cookie, the page names it, and the pairs its
+plugins ask for are asked of it (GET /api/login/pairs), never read from a plugin here. A sign-up begins with an
 email; a six-digit code goes to it through the user's own mail account (liminal_libs.mail); typed
 back, the name and the password are chosen and the account is made and signed in. Sessions live in
 memory: a token in the page's cookie and in a client's X-Liminal-Session header, the user's vault
@@ -16,27 +19,32 @@ open for the session's life and closed at sign-out or once idle too long. The ro
 and the library's LoginClient's."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import unquote
 
 from liminal_libs import layout
-from liminal_libs.apps import SESSION_HEADER, App, Refused, Scope
+from liminal_libs.apps import (PAIRS_PATH, SESSION_HEADER, SUPER_TITLE_VAR, SUPER_URL_VAR, SUPER_VAR, App, Refused,
+                               Scope)
 from liminal_libs.layout import data_dir
 from liminal_libs.mail import MailError, Mailer, mask, mx_records
 from .users import CODE_MINUTES, User, UserStore
-from .vault import KeyPairStore, store_file
+from .vault import PAIR_NAME, KeyPairStore, store_file
 
-DIR_VAR = "LIMINAL_LOGIN_DIR"  # where the namespaces' folders live (store/data/login by default)
-FOR_VAR = "LIMINAL_LOGIN_FOR"  # the app this instance serves: its users' namespace
-NAMESPACES = {"charts": ("Liminal Charts", 8795), "integrator": ("Liminal Integrator", 8796)}  # title, default port
-NAMESPACE = re.compile(r"^[a-z][a-z0-9-]{1,23}$")
+DIR_VAR = "LIMINAL_LOGIN_DIR"  # the login's folder (store/data/login by default): its own users, a superclass's folder each
+FOR_VAR = SUPER_VAR  # LIMINAL_LOGIN_FOR: the app that inherits this login, when one does (its superclass)
+NAMESPACE = re.compile(r"^[a-z][a-z0-9-]{1,23}$")  # a superclass's short name
+RESERVED = frozenset({"users", "logs", "dkim"})  # the login's own folders: never a superclass's
+PAIRS_SECONDS = 60.0  # the pairs a superclass's plugins ask for, asked of it again after this long
 SESSION_MINUTES_VAR = "LIMINAL_LOGIN_SESSION_MINUTES"
 SESSION_MINUTES = 480.0  # a session ends after this long without a request
 FAILURE_DELAY_S = 0.5  # after a wrong name or password: no guessing at speed
@@ -48,7 +56,7 @@ CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
 
 def login_dir() -> Path:
     """The login's folder: LIMINAL_LOGIN_DIR, else `login/` in the data folder (store/data), never
-    in a repository; each namespace has a folder of its own inside it."""
+    in a repository; the login's own users in it, and a folder in it for each app that inherits it."""
     raw = (os.environ.get(DIR_VAR) or "").strip()
     return Path(raw) if raw else data_dir() / "login"
 
@@ -56,18 +64,41 @@ def login_dir() -> Path:
 MX_SECONDS = 600.0  # a domain's mail record is looked up again after this long
 
 
-def folder_for(root: Path, scope: Scope, namespace: str) -> Path:
-    """The namespace's folder under `root`: a domain's login keeps a folder per domain first."""
-    return root / scope.domain / namespace if scope.kind == "domain" else root / namespace
+@dataclass(frozen=True)
+class Superclass:
+    """The app that inherits this login, its superclass (charts, platform, integrator, or an app to come), as it said
+    when it started the login: its short name (its users' folder and cookie here), how the page names it, and where it
+    answers the pairs its plugins ask for (PAIRS_PATH). The login knows nothing else of it."""
+
+    name: str
+    title: str = ""
+    url: str = ""
+
+    def describe(self) -> dict:
+        return {"name": self.name, "title": self.title, "url": self.url}
 
 
-def namespace_of(value=None) -> str:
-    """The app this instance serves (`value`, else LIMINAL_LOGIN_FOR, else charts): charts or
-    integrator, or another short name for an app to come."""
-    raw = (value or os.environ.get(FOR_VAR) or "charts").strip().lower()
-    if not NAMESPACE.match(raw):
-        raise ValueError(f"the app a login serves is a short name like charts or integrator, not {raw!r}")
-    return raw
+def superclass_of(name=None, title=None, url=None, env=None) -> Superclass | None:
+    """The app this login is inherited by: `name` (else LIMINAL_LOGIN_FOR), its title (else LIMINAL_LOGIN_FOR_TITLE, else
+    "Liminal <Name>") and its address (else LIMINAL_LOGIN_FOR_URL). None: no app inherits it, the login on its own."""
+    env = os.environ if env is None else env
+    raw = str(name or env.get(SUPER_VAR) or "").strip().lower()
+    if not raw:
+        return None
+    if not NAMESPACE.match(raw) or raw in RESERVED:
+        raise ValueError(f"the app that inherits a login is named by a short name like charts, platform or integrator, not {raw!r}")
+    shown = str(title or env.get(SUPER_TITLE_VAR) or "").strip() or f"Liminal {raw.replace('-', ' ').title()}"
+    where = str(url or env.get(SUPER_URL_VAR) or "").strip().rstrip("/")
+    if where and not where.lower().startswith(("http://", "https://")):
+        raise ValueError(f"the address of the app that inherits a login is an http(s) URL, not {where!r}")
+    return Superclass(raw, shown, where)
+
+
+def folder_for(root: Path, scope: Scope, superclass: Superclass | None = None) -> Path:
+    """Where the users live under `root`: the login's own folder on its own, the superclass's folder in it when one
+    inherits it; a domain's login keeps a folder per domain first."""
+    base = root / scope.domain if scope.kind == "domain" else root
+    return base / superclass.name if superclass is not None else base
 
 
 @dataclass
@@ -86,25 +117,30 @@ class Session:
 
 class LoginApp(App):
     NAME, ICON = "login", "user"
+    PORT = 8795
     PORT_VAR = "LIMINAL_LOGIN_PORT"
     STATIC = Path(__file__).parent / "static"
-    API = "1.2"
+    API = "1.3"  # 1.3 (0.13.0): on its own unless inherited; `for` null on its own, `superclass` in the status
 
     def __init__(self, directory: Path | None = None, log=print, failure_delay: float = FAILURE_DELAY_S, mailer=None,
-                 namespace: str | None = None, scope: Scope | None = None):
+                 superclass: Superclass | str | None = None, scope: Scope | None = None):
         super().__init__(log)
-        self.namespace = namespace_of(namespace)
-        self.title_for, self.PORT = NAMESPACES.get(self.namespace, (f"Liminal {self.namespace.capitalize()}", 8795))
-        self.TITLE = f"Login: {self.title_for}"
-        self.cookie_name = f"liminal_login_{self.namespace.replace('-', '_')}"  # cookies ignore ports: one a namespace
+        # the app that inherits this login, as it said (a Superclass, or its short name), else LIMINAL_LOGIN_FOR; none:
+        # the login on its own
+        self.superclass = superclass if isinstance(superclass, Superclass) else superclass_of(superclass)
         # What this login is tied to (liminal_libs.apps.scope; the user, 2026-11-06: "login apps tied to domains
         # (with email server) or local (file://project/folder)"): the scope given, else the file found (not
         # when the users' folder is given outright: a test's), else local to the folder, else to the workspace
         self.scope = scope or (Scope.find() if directory is None else None) \
             or Scope.local(Path(directory) if directory else (layout.home() or login_dir()))
+        sup = self.superclass
+        self.title_for = sup.title if sup is not None else (self.scope.title or "Liminal")  # what the page names
+        self.TITLE = f"Login: {sup.title}" if sup is not None else "Login"
+        # cookies ignore ports: one a superclass, and the login's own
+        self.cookie_name = f"liminal_login_{sup.name.replace('-', '_')}" if sup is not None else "liminal_login"
         self.root = Path(directory) if directory else (login_dir() if (os.environ.get(DIR_VAR) or "").strip()
                                                        else self.scope.data_dir(login_dir()))
-        self.dir = folder_for(self.root, self.scope, self.namespace)
+        self.dir = folder_for(self.root, self.scope, sup)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.users = UserStore(self.dir / "users.db")
         self.mailer = mailer or Mailer(log=self.log, cfg=self.scope.mail_variables())
@@ -113,12 +149,20 @@ class LoginApp(App):
         self.failure_delay = failure_delay
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
+        self._pairs_asked: tuple[float, list[dict]] | None = None  # the superclass's word on its plugins' pairs, and when
+
+    @property
+    def namespace(self) -> str | None:
+        """The superclass's short name (its users' folder here), None on its own."""
+        return self.superclass.name if self.superclass is not None else None
 
     def describe(self) -> dict:
-        return {**super().describe(), "for": self.namespace, "forTitle": self.title_for, "scope": self.scope.describe()}
+        return {**super().describe(), "for": self.namespace, "forTitle": self.title_for,
+                "superclass": self.superclass.describe() if self.superclass is not None else None, "scope": self.scope.describe()}
 
     def port(self) -> int:
-        """LIMINAL_LOGIN_PORT, else the scope's file's port, else the namespace's."""
+        """LIMINAL_LOGIN_PORT, else the scope's file's port, else 8795 (an app that inherits the login starts it at the
+        port it binds: `--port`)."""
         raw = (os.environ.get(self.PORT_VAR) or "").strip()
         return int(raw) if raw.isdecimal() else (self.scope.port or self.PORT)
 
@@ -264,7 +308,9 @@ class LoginApp(App):
         if path == "/api/status" and method == "GET":
             s = self.session(handler)
             return 200, {"users": self.users.count(), "signedIn": s is not None, "name": s.user.name if s else None,
-                         "for": self.namespace, "forTitle": self.title_for, "scope": self.scope.describe(),
+                         "for": self.namespace, "forTitle": self.title_for,
+                         "superclass": self.superclass.describe() if self.superclass is not None else None,
+                         "scope": self.scope.describe(),
                          "signup": self.signup_status(), "app": self.describe()}
         if path == "/api/users" and method == "GET":
             self._require(handler)
@@ -403,24 +449,45 @@ class LoginApp(App):
         return self._signed_in(user, 201)
 
     def known_pairs(self, s: Session | None = None) -> list[dict]:
-        """The pairs the plugins of this login's app ask for (the user, 2026-11-06: "By the
-        variables"): every plugin's key variables as pairs (`massive-api-key` for MASSIVE_API_KEY),
-        with the plugin, its label, whether it is a secret, and whether the signed-in user has it.
-        Read from the plugin registry when asked (the plugins installed beside this app)."""
-        try:
-            from liminal_libs.sources.registry import assistants, providers, publishers
-        except Exception:  # noqa: BLE001 - no registry here: nothing known
-            return []
+        """The pairs the superclass's plugins ask for (the user, 2026-11-06: "By the variables": `massive-api-key` for
+        MASSIVE_API_KEY), each marked whether the signed-in user has it. Asked of the superclass, since the login knows
+        no plugin itself (0.13.0, the user: "the log-in app should not point to platform, integrator or charts"); none
+        for the login on its own, or when its superclass gives no address or does not answer."""
         have = {p["name"] for p in s.vault.names()} if s is not None else set()
-        plugins = [*providers().values(), *publishers().values(), *assistants().values()]
-        rows: dict[str, dict] = {}  # by pair: a plugin's parts share their keys (one row, the plugin's own)
-        for p in sorted(plugins, key=lambda p: (getattr(p, "part_of", None) or p.name, p.name)):
-            for k in getattr(p, "keys", ()) or ():
-                rows.setdefault(k.pair, {"name": k.pair, "variable": k.name, "plugin": getattr(p, "part_of", None) or p.name,
-                                         "title": p.title, "label": k.label, "secret": k.secret,
-                                         "kind": "key" if k.secret else "detail", "system": getattr(p, "SYSTEM", ""),
-                                         "set": k.pair in have})
-        return sorted(rows.values(), key=lambda r: (r["plugin"], r["name"]))
+        return [{**r, "set": r["name"] in have} for r in self.superclass_pairs()]
+
+    def superclass_pairs(self) -> list[dict]:
+        """The superclass's word on the pairs its plugins ask for (GET <its address>/api/login/pairs), kept a minute."""
+        sup = self.superclass
+        if sup is None or not sup.url:
+            return []
+        now = time.monotonic()
+        with self._lock:
+            kept = self._pairs_asked
+        if kept is not None and now - kept[0] < PAIRS_SECONDS:
+            return kept[1]
+        rows = self._ask_pairs(sup)
+        with self._lock:
+            self._pairs_asked = (now, rows)
+        return rows
+
+    def _ask_pairs(self, sup: Superclass) -> list[dict]:
+        """One question to the superclass, never through a proxy; its rows kept as data (a name a pair can have, the
+        fields the page shows), anything else dropped. A superclass that does not answer: none, said in the log."""
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        request = urllib.request.Request(sup.url + PAIRS_PATH, headers={"Accept": "application/json"})
+        try:
+            with opener.open(request, timeout=3) as r:
+                data = json.loads(r.read(1_000_000))
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+            self.log(f"login: {sup.title} did not say which pairs its plugins ask for ({sup.url}{PAIRS_PATH}: {e})")
+            return []
+        rows = []
+        for r in (data.get("pairs") if isinstance(data, dict) else None) or []:
+            if isinstance(r, dict) and isinstance(r.get("name"), str) and PAIR_NAME.match(r["name"]):
+                rows.append({"name": r["name"], **{k: str(r.get(k) or "") for k in ("variable", "plugin", "title", "label", "kind", "system")},
+                             "secret": bool(r.get("secret"))})
+        return rows
 
     def _me(self, s: Session) -> dict:
         """The signed-in user for the page: who, since when, their store and the fingerprints of the

@@ -1,10 +1,12 @@
-"""`liminal-login`: the login app's command line. Every command takes `--for charts|integrator`, the
-app this login serves (LIMINAL_LOGIN_FOR; charts by default): its users live in that namespace's folder,
-with their own cookie and default port (charts 8795, integrator 8796). `serve` keeps the page at its
-port (LIMINAL_LOGIN_PORT) until Ctrl+C; `user add NAME [--email ADDRESS]` makes a user (the password
+"""`liminal-login`: the login app's command line. On its own the login knows no other app: its users live
+in its own folder (0.13.0; the user: "it should be standalone"). `--for NAME` (LIMINAL_LOGIN_FOR, with
+`--for-title` and `--for-url`) is the app that inherits it, its superclass (charts, platform, integrator):
+that app's users then live in its folder here, with their own cookie, and its plugins' pairs are asked of it
+at its address; the app passes these itself when it starts the login. `serve` keeps the page at its port
+(LIMINAL_LOGIN_PORT, 8795) until Ctrl+C; `user add NAME [--email ADDRESS]` makes a user (the password
 typed hidden, twice; never on the command line; no code: the machine's owner adding one); `user list`
 names them; `status` says what is there; `mail test ADDRESS` sends a test message through the mail
-account in your environment (LIMINAL_SMTP_*: liminal_libs.mail). The folder of the namespaces is
+account in your environment (LIMINAL_SMTP_*: liminal_libs.mail). The login's folder is
 LIMINAL_LOGIN_DIR, else store/data/login (liminal_libs.layout)."""
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ from liminal_libs.mail import FROM_VAR, HOST_VAR, PASSWORD_VAR, PORT_VAR, SECURI
 
 from . import __version__
 from . import mailcheck
-from .app import DIR_VAR, LoginApp, folder_for, login_dir, namespace_of
+from .app import DIR_VAR, LoginApp, Superclass, folder_for, login_dir, superclass_of
 from .users import UserStore
 
 
@@ -47,14 +49,15 @@ def _root(args) -> Path:
     return scope.data_dir(login_dir()) if scope is not None else login_dir()
 
 
-def _namespace(args) -> str:
-    return namespace_of(getattr(args, "for_", None))
+def _superclass(args) -> Superclass | None:
+    """The app that inherits this login (--for, else LIMINAL_LOGIN_FOR), None: the login on its own."""
+    return superclass_of(getattr(args, "for_", None), getattr(args, "for_title", None), getattr(args, "for_url", None))
 
 
 def _dir(args) -> Path:
-    """The namespace's folder: the users' file and the stores of the app this login serves."""
+    """Where the users live: the login's own folder, or its superclass's folder in it."""
     root = _root(args)
-    return folder_for(root, _scope(args) or Scope.local(root), _namespace(args))
+    return folder_for(root, _scope(args) or Scope.local(root), _superclass(args))
 
 
 def _log(folder: Path) -> Logger:
@@ -63,7 +66,7 @@ def _log(folder: Path) -> Logger:
 
 def cmd_serve(args) -> int:
     folder = _dir(args)
-    app = LoginApp(_root(args), log=_log(folder), namespace=_namespace(args), scope=_scope(args))
+    app = LoginApp(_root(args), log=_log(folder), superclass=_superclass(args), scope=_scope(args))
     port = args.port if args.port is not None else app.port()
     print(f"login app for {app.title_for}: its page at {app.url(port)} (the folder {folder}; {app.mail_words()}; "
           "Ctrl+C to stop)", flush=True)
@@ -83,13 +86,14 @@ def cmd_status(args) -> int:
     finally:
         users.close()
     scope = _scope(args) or Scope.local(_root(args))
-    port = LoginApp(_root(args), log=lambda m: None, namespace=_namespace(args), scope=scope).port() if not args.port else args.port
+    sup = _superclass(args)
+    port = LoginApp(_root(args), log=lambda m: None, superclass=sup, scope=scope).port() if not args.port else args.port
     mail = MailSettings.from_env()
     account = (f"mail {'through ' + mail.host + ' as ' + (mail.user or mail.sender) if mail.configured else 'not set up (' + '; '.join(mail.problems()) + ')'}"
                + (f"; signed under {mail.dkim_record}" if mail.signing else ""))
     # a local login sends no email: the mail account is this machine's, there for `mail test` and `mail dkim` (0.12.1)
     mail_part = f"no email (a local login); this machine's {account}" if scope.kind != "domain" else account
-    print(f"login app for {_namespace(args)}: {len(names)} user(s) in {folder / 'users.db'}; "
+    print(f"login app {'inherited by ' + sup.name if sup is not None else 'on its own'}: {len(names)} user(s) in {folder / 'users.db'}; "
           f"{'answering' if web.listening(port) else 'not running'} at port {port}; "
           f"{mail_part}; {scope.label}" + (f" ({scope.path})" if scope.path else ""))
     for u in names:
@@ -323,7 +327,7 @@ def cmd_server(args) -> int:
 
 
 def cmd_init(args) -> int:
-    """`init SCOPE [--title T] [--serves a,b] [--port P] [--members any] [--cfg PATH] [--force]`: the login's file,
+    """`init SCOPE [--title T] [--port P] [--members any] [--cfg PATH] [--force]`: the login's file,
     liminal-login.cfg (the user, 2026-11-06: "have like a setup.cfg for the login, and then like other web
     apps use that cfg file to decide the domain/scope of the login"). SCOPE is file:///a/project/folder (a
     local login: no email, no sign-up) or https://a.domain (the domain's users, their codes through its
@@ -339,8 +343,7 @@ def cmd_init(args) -> int:
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 2
-    serves = tuple(s.strip().lower() for s in (args.serves or "charts").replace(";", ",").split(",") if s.strip()) or ("charts",)
-    scope = replace(scope, title=(args.title or "").strip(), serves=serves, port=args.port)
+    scope = replace(scope, title=(args.title or "").strip(), port=args.port)  # no app named: the one inheriting it says so
     path = Path(args.cfg) if args.cfg else ((scope.root if scope.kind == "local" else (layout.home() or login_dir())) / FILE_NAME)
     if path.exists() and not args.force:
         print(f"{path} is there already; --force replaces it", file=sys.stderr)
@@ -406,10 +409,15 @@ def mail_test(address: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="liminal-login", description="The Liminal login app: the users and their keys and accounts.")
     p.add_argument("--version", action="version", version=f"liminal-login {__version__}")
-    p.add_argument("--dir", help="the folder of the namespaces (LIMINAL_LOGIN_DIR; store/data/login by default)")
+    p.add_argument("--dir", help="the login's folder (LIMINAL_LOGIN_DIR; store/data/login by default)")
     p.add_argument("--cfg", default=None, help=f"the login's file, {FILE_NAME} (LIMINAL_LOGIN_CFG; else the one found: the workspace's, the working folder's)")
     p.add_argument("--for", dest="for_", default=None,
-                   help="the app this login serves, its users' namespace: charts (the default) or integrator (LIMINAL_LOGIN_FOR)")
+                   help="the app that inherits this login, its superclass: charts, platform, integrator (LIMINAL_LOGIN_FOR); "
+                        "none: the login on its own")
+    p.add_argument("--for-title", dest="for_title", default=None,
+                   help="how the page names that app (LIMINAL_LOGIN_FOR_TITLE; Liminal <Name>)")
+    p.add_argument("--for-url", dest="for_url", default=None,
+                   help="where that app answers the pairs its plugins ask for (LIMINAL_LOGIN_FOR_URL)")
     sub = p.add_subparsers(dest="command")
     s = sub.add_parser("serve", help="keep the login's page at its port until Ctrl+C")
     s.add_argument("--port", type=int, default=None, help="the page's port (LIMINAL_LOGIN_PORT, 8795)")
@@ -420,7 +428,6 @@ def build_parser() -> argparse.ArgumentParser:
     i = sub.add_parser("init", help=f"write {FILE_NAME}: SCOPE is file:///a/project/folder (local) or https://a.domain (the domain's users)")
     i.add_argument("scope_url")
     i.add_argument("--title", default=None)
-    i.add_argument("--serves", default=None, help="the apps this login serves: charts, integrator (charts)")
     i.add_argument("--port", type=int, default=None)
     i.add_argument("--members", default=None, help="a domain's login: domain (addresses at the domain only) or any")
     i.add_argument("--admin", default=None, help="a domain's login: its own account, admin@<a host under the domain> (admin@<domain>)")

@@ -13,7 +13,7 @@ from liminal_libs.web import WRITE_HEADER
 from liminal_login.app import LoginApp, login_dir
 
 
-COOKIE = "liminal_login_charts"  # the charts namespace's (the tests' default)
+COOKIE = "liminal_login"  # the login's own, on its own (the tests' default; an inheriting app's: liminal_login_<name>)
 
 
 def _call(port, method, path, body=None, headers=None, token=None):
@@ -42,9 +42,9 @@ def test_the_page_its_icon_and_the_librarys_files(served):
     assert b"window.LiminalIcons" in _call(port, "GET", "/icons.js")[1] and b"#rail" in _call(port, "GET", "/liminal.css")[1]
     assert b"signInForm" in _call(port, "GET", "/login.js")[1] and _call(port, "GET", "/login.css")[0] == 200
     status, tray, _ = _call(port, "GET", "/api/tray")
-    assert tray == {"app": "login", "icon": "user", "title": "Login: Liminal Charts",
-                    "items": [{"id": "login", "icon": "user", "title": "Login: Liminal Charts", "kind": "app", "app": "login"}]}
-    assert _call(port, "GET", "/api/app")[1]["port"] == 8795 and app.port() == 8795 and app.dir == app.root / "charts"
+    assert tray == {"app": "login", "icon": "user", "title": "Login",
+                    "items": [{"id": "login", "icon": "user", "title": "Login", "kind": "app", "app": "login"}]}
+    assert _call(port, "GET", "/api/app")[1]["port"] == 8795 and app.port() == 8795 and app.dir == app.root  # its own folder
     assert any("login: its page at" in m for m in lines)
 
 
@@ -52,7 +52,8 @@ def test_the_first_user_is_made_from_the_page_then_signs_in_and_out(served):
     app, port, lines = served
     st = _call(port, "GET", "/api/status")[1]
     assert {k: st[k] for k in ("users", "signedIn", "name", "app")} == {"users": 0, "signedIn": False, "name": None, "app": app.describe()}
-    assert st["signup"]["email"] is False and st["for"] == "charts" and app.describe()["for"] == "charts" and app.cookie_name == COOKIE
+    assert st["signup"]["email"] is False and st["for"] is None and st["superclass"] is None and app.describe()["for"] is None
+    assert st["forTitle"] == "Liminal" and app.cookie_name == COOKIE  # on its own: no app inherits it
     assert _call(port, "GET", "/api/me")[0] == 401 and _call(port, "GET", "/api/pairs")[0] == 401
     status, data, _ = _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})
     assert status == 201 and data["name"] == "Ada" and "password" not in json.dumps(data)
@@ -170,28 +171,64 @@ def test_the_library_client_against_the_real_app(served, monkeypatch):
         worker.key("massive")
 
 
-def test_the_pairs_the_plugins_ask_for_are_listed_by_their_variables(served):
-    # the user, 2026-11-06, "By the variables": the plugins installed beside this app ask for pairs named
-    # after their key variables (massive-api-key for MASSIVE_API_KEY), each once, set or not for the user
-    from liminal_libs.sources.registry import assistants, providers, publishers
+def test_the_pairs_an_inheriting_apps_plugins_ask_for_are_asked_of_it(served, folder):
+    """0.13.0 (the user, 2026-11-10: "the log-in app should not point to platform, integrator or charts, it should be
+    standalone"; "when its inherited it can point to it's superclass"): on its own the login lists no plugin's pairs; an
+    app that inherits it answers GET /api/login/pairs with its plugins' (the user, 2026-11-06, "By the variables":
+    massive-api-key for MASSIVE_API_KEY), kept as data, and the login marks the ones the signed-in user has. A
+    superclass that does not answer: none, said in the log."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from conftest import _port
+    from liminal_libs.apps import SESSION_HEADER
+    from liminal_login.app import superclass_of
 
     app, port, lines = served
-    plugins = [*providers().values(), *publishers().values(), *assistants().values()]
-    wanted = {k.pair for p in plugins for k in (p.keys or ())}
-    status, data, _ = _call(port, "GET", "/api/pairs/known")  # without a session: what there is, none set
-    known = data["known"]
-    assert status == 200 and {r["name"] for r in known} == wanted and len(known) == len(wanted)
-    assert not any(r["set"] for r in known) and known == sorted(known, key=lambda r: (r["plugin"], r["name"]))
-    assert all(r["variable"] == r["variable"].upper() and r["kind"] in ("key", "detail") and r["kind"] == ("key" if r["secret"] else "detail")
-               and r["name"] == r["variable"].lower().replace("_", "-") for r in known)
-    if not wanted:  # no plugin installed beside this app (CI): nothing is known, and that is the answer
-        return
-    _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})
-    token = _call(port, "POST", "/api/sign-in", {"name": "Ada", "password": "correct horse battery"})[1]["token"]
-    first = known[0]
-    assert _call(port, "PUT", f"/api/pairs/{first['name']}", {"value": "a-test-value", "kind": first["kind"]}, token=token)[0] == 200
-    after = {r["name"]: r for r in _call(port, "GET", "/api/pairs/known", token=token)[1]["known"]}
-    assert after[first["name"]]["set"] and not any(r["set"] for n, r in after.items() if n != first["name"])
+    assert _call(port, "GET", "/api/pairs/known")[1] == {"known": []}  # on its own: no plugin known, none asked
+    asked: list[str] = []
+    acme = {"name": "acme-api-key", "variable": "ACME_API_KEY", "plugin": "acme", "title": "Acme", "label": "API key",
+            "secret": True, "kind": "key", "system": "integrator"}
+
+    class Inheriting(BaseHTTPRequestHandler):  # the app that inherits the login, as far as the login asks it
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            asked.append(self.path)
+            body = json.dumps({"pairs": [acme, {"name": "Not A Pair!", "variable": "X"}, "junk"]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Inheriting)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    inherited = LoginApp(folder, log=lines.append, failure_delay=0,
+                         superclass=superclass_of("charts", url=f"http://127.0.0.1:{srv.server_address[1]}/"))
+    try:
+        iport = _port(inherited.start(0))
+        st = _call(iport, "GET", "/api/status")[1]
+        assert st["for"] == "charts" and st["forTitle"] == "Liminal Charts" and st["superclass"]["name"] == "charts"
+        known = _call(iport, "GET", "/api/pairs/known")[1]["known"]
+        assert known == [{**acme, "set": False}] and asked == ["/api/login/pairs"]  # what is not a pair dropped
+        assert _call(iport, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})[0] == 201
+        token = _call(iport, "POST", "/api/sign-in", {"name": "Ada", "password": "correct horse battery"})[1]["token"]
+        session = {SESSION_HEADER: token}
+        assert _call(iport, "PUT", "/api/pairs/acme-api-key", {"value": "a-test-value", "kind": "key"}, headers=session)[0] == 200
+        after = _call(iport, "GET", "/api/pairs/known", headers=session)[1]["known"]
+        assert after == [{**acme, "set": True}] and asked == ["/api/login/pairs"]  # kept a minute: asked once
+        assert app.users.count() == 0 and inherited.users.count() == 1  # its users apart from the login's own
+    finally:
+        inherited.close()
+        srv.shutdown()
+        srv.server_close()
+    away = LoginApp(folder, log=lines.append, failure_delay=0, superclass=superclass_of("platform", url=f"http://127.0.0.1:{srv.server_address[1]}"))
+    try:
+        assert away.known_pairs() == [] and any("Liminal Platform did not say which pairs" in m for m in lines)
+    finally:
+        away.close()
 
 
 def test_the_login_folder_is_the_data_folders_unless_said(monkeypatch, tmp_path):
@@ -230,7 +267,7 @@ def test_the_page_answers_a_finger_and_an_on_screen_keyboard(served):
                   """<input id="again" type="password" ${kb('password', NEW_DONE)} required minlength="8">""",
                   """<input id="address" type="email" ${kb('email', 'send')} maxlength="254" required>""",
                   """<input id="digits" type="text" class="mono" ${kb('code')} placeholder="123456" maxlength="8" required>""",
-                  """<input id="pName" type="text" list="knownNames" ${kb('plain', 'next')} placeholder="massive-api-key\"""",
+                  """<input id="pName" type="text" list="knownNames" ${kb('plain', 'next')} placeholder="some-api-key\"""",
                   """<input id="pLabel" type="text" ${kb('text', 'next')} placeholder""",
                   """<input id="pValue" type="password" ${kb('secret')} maxlength="4096" required>""",
                   """<input id="old" type="password" ${kb('password', 'next')} required>""",

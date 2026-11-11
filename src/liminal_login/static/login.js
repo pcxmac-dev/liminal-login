@@ -4,7 +4,7 @@
 // the code from the email, then the account name and the password; signed in, who you are, your
 // store and the fingerprints of the keys that mask it, your pairs (masked; revealed one at a time),
 // a form to add one, a password change, sign out. The API paths are relative, so the page works under
-// another app's prefix too (the charts app's /login/); inside another app's page (?embedded=1) the
+// another app's prefix too (an inheriting app's /login/, say); inside another app's page (?embedded=1) the
 // rail is hidden and the parent page is told when you sign in or out.
 // 0.12.0 (the user, 2026-11-10: "let's do an update. I want to support touch as well as mouse clicking on the
 // interface ... We'll make sure it works across all apps"; "Support for virtual keyboard on tablets and phones"): every
@@ -46,7 +46,7 @@
   let mail = {};  // how codes go out (the status's signup: the host, the sender, the last send's receipt)
 
   function tell(signedIn, name) {
-    // the page holding this one (the charts app's) learns who is signed in
+    // the page holding this one (the page of an app that inherits the login) learns who is signed in
     if (embedded && window.parent !== window) window.parent.postMessage({ liminal: 'login', signedIn, name: name || null }, location.origin);
   }
 
@@ -76,7 +76,7 @@
     const me = await api('GET', 'api/me');
     const pairs = (await api('GET', 'api/pairs')).pairs;
     const known = (await api('GET', 'api/pairs/known')).known;  // the pairs the plugins here ask for
-    main.innerHTML = userCard(me) + pairsTable(pairs) + knownTable(known) + addForm(known) + changeForm();
+    main.innerHTML = userCard(me) + pairsTable(pairs, known) + knownTable(known) + addForm(known) + changeForm();
     titled(me.name);
     wire(me);
     tell(true, me.name);
@@ -250,8 +250,10 @@
       </dl>`;
   }
 
-  function pairsTable(pairs) {
-    if (!pairs.length) return `<h2>Your keys and accounts</h2><p class="muted">No pairs yet. Add one below: a pair is named by the plugin's variable, <code>massive-api-key</code> for <code>MASSIVE_API_KEY</code>; the plugins installed here list the pairs they ask for.</p>`;
+  function pairsTable(pairs, known) {
+    // the login knows no plugin of its own (0.13.0): the pairs a plugin asks for are listed only when an app inherits it
+    // and says which (knownTable)
+    if (!pairs.length) return `<h2>Your keys and accounts</h2><p class="muted">No pairs yet. Add one below: a pair is named after the variable it stands for, <code>some-api-key</code> for <code>SOME_API_KEY</code>${known.length ? `; the pairs the plugins of ${esc(forTitle)} ask for are listed below` : ''}.</p>`;
     const rows = pairs.map((p) => `<tr data-name="${esc(p.name)}">
         <td class="mono">${esc(p.name)}</td><td><span class="kind">${esc(p.kind)}</span></td><td>${esc(p.label)}</td>
         <td class="muted">${esc(when(p.updatedAt))}</td>
@@ -263,22 +265,22 @@
   }
 
   function knownTable(known) {
-    // the pairs the plugins installed beside this app ask for (named by their variables: the user,
-    // 2026-11-06, "By the variables"), each set already or one click from the form below
+    // the pairs the plugins of the app that inherits this login ask for, as that app said (named by their variables:
+    // the user, 2026-11-06, "By the variables"), each set already or one click from the form below; none on its own
     if (!known.length) return '';
     const rows = known.map((k) => `<tr>
         <td>${esc(k.title || k.plugin)}</td><td class="mono">${esc(k.name)}</td><td>${esc(k.label)}</td>
         <td class="muted mono">${esc(k.variable)}</td>
         <td>${k.set ? '<span class="kind">set</span>' : `<button type="button" class="use" data-name="${esc(k.name)}" data-kind="${esc(k.kind)}" data-label="${esc(k.label)}" title="Fill the form below with this pair">Add</button>`}</td></tr>`).join('');
-    return `<h2>Pairs your plugins ask for</h2><table class="list known"><thead><tr><th>Plugin</th><th>Name</th><th>For</th><th>Variable</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    return `<h2>Pairs the plugins of ${esc(forTitle)} ask for</h2><table class="list known"><thead><tr><th>Plugin</th><th>Name</th><th>For</th><th>Variable</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   function addForm(known) {
     const options = known.filter((k) => !k.set).map((k) => `<option value="${esc(k.name)}">${esc(k.title || k.plugin)}: ${esc(k.label)}</option>`).join('');
     return `<form id="add" class="add-pair">
-      <div class="field"><label for="pName">Name</label><input id="pName" type="text" list="knownNames" ${kb('plain', 'next')} placeholder="massive-api-key" maxlength="64" required pattern="[a-z0-9][a-z0-9._\\-]*"><datalist id="knownNames">${options}</datalist></div>
+      <div class="field"><label for="pName">Name</label><input id="pName" type="text" list="knownNames" ${kb('plain', 'next')} placeholder="some-api-key" maxlength="64" required pattern="[a-z0-9][a-z0-9._\\-]*"><datalist id="knownNames">${options}</datalist></div>
       <div class="field"><label for="pKind">Kind</label><select id="pKind">${KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}</select></div>
-      <div class="field"><label for="pLabel">Label</label><input id="pLabel" type="text" ${kb('text', 'next')} placeholder="Massive, the paid plan" maxlength="80"></div>
+      <div class="field"><label for="pLabel">Label</label><input id="pLabel" type="text" ${kb('text', 'next')} placeholder="what it is for" maxlength="80"></div>
       <div class="field"><label for="pValue">Value</label><input id="pValue" type="password" ${kb('secret')} maxlength="4096" required></div>
       <button type="submit" class="accent">Add</button>
       <p id="addErr" class="error" style="grid-column: 1 / -1"></p></form>`;
