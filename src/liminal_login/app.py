@@ -141,6 +141,23 @@ class LoginApp(App):
     def signup_open(self) -> bool:
         return self.signup_closed_why() == ""
 
+    def signup_status(self) -> dict:
+        """The status's word on signing up: whether a code can make an account here, and why not. A local login sends no
+        email, so it names no mail account (0.12.1: it named this machine's, the sender's address among them, though it
+        never sends a message); a domain's says how its codes go out and the mail server's word on the last one."""
+        why = self.signup_closed_why()
+        if self.scope.kind != "domain":
+            return {"email": False, "local": True, "configured": False, "lastSent": None, "why": why}
+        return {"email": why == "", "local": False, **self.mailer.settings.describe(), "lastSent": self.last_sent, "why": why}
+
+    def mail_words(self) -> str:
+        """How the codes go out, in words for the start-up line (0.12.1: a local login said "passkeys through direct",
+        this machine's mail account, though it sends none)."""
+        if self.scope.kind != "domain":
+            return "a local login: no email"
+        s = self.mailer.settings
+        return f"passkeys through {s.host}" if s.configured else "no mail account set (LIMINAL_SMTP_*): no passkeys"
+
     def _domain_mail_record(self) -> list[str]:
         now = time.monotonic()
         if self._exchangers is None or now - self._exchangers[0] > MX_SECONDS:
@@ -248,9 +265,7 @@ class LoginApp(App):
             s = self.session(handler)
             return 200, {"users": self.users.count(), "signedIn": s is not None, "name": s.user.name if s else None,
                          "for": self.namespace, "forTitle": self.title_for, "scope": self.scope.describe(),
-                         "signup": {"email": self.signup_open(), **self.mailer.settings.describe(), "lastSent": self.last_sent,
-                                    "why": self.signup_closed_why()},
-                         "app": self.describe()}
+                         "signup": self.signup_status(), "app": self.describe()}
         if path == "/api/users" and method == "GET":
             self._require(handler)
             return 200, {"users": self.users.names()}

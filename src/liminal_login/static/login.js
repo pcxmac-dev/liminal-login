@@ -60,19 +60,24 @@
   }
   const when = (iso) => (iso ? new Date(iso).toLocaleString() : 'never');
 
+  // the tab says where the page is: sign in, the first user, sign up, or who is signed in (0.12.1: it said "sign in"
+  // throughout, signed in too)
+  const titled = (what) => { document.title = `${forTitle}: ${what}`; };
+
   async function render() {
     let st;
     try { st = await api('GET', 'api/status'); }
     catch (e) { main.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
     forTitle = st.forTitle || 'Liminal';
     mail = st.signup || {};
-    document.title = `${forTitle}: sign in`;
+    titled('sign in');
     if (signup) return signup.token ? detailsForm() : codeForm();
     if (!st.signedIn) { tell(false); return signInForm(st); }
     const me = await api('GET', 'api/me');
     const pairs = (await api('GET', 'api/pairs')).pairs;
     const known = (await api('GET', 'api/pairs/known')).known;  // the pairs the plugins here ask for
     main.innerHTML = userCard(me) + pairsTable(pairs) + knownTable(known) + addForm(known) + changeForm();
+    titled(me.name);
     wire(me);
     tell(true, me.name);
   }
@@ -81,7 +86,7 @@
   function signInForm(st) {
     const first = st.users === 0;
     const mail = st.signup && st.signup.email;
-    if (first && !mail) return firstUserForm();
+    if (first && !mail) return firstUserForm(st);
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('user', 56)}</div>
       <h1>${first ? `Welcome to ${esc(forTitle)}` : `Sign in to ${esc(forTitle)}`}</h1>
@@ -112,12 +117,15 @@
     if (mail) $('toSignup').addEventListener('click', () => emailForm(first));
   }
 
-  function firstUserForm() {
-    // no mail account on this machine: the first user is made here, without a code
+  function firstUserForm(st) {
+    // no sign-up by email here (a local login sends none; a domain's has no email server yet): the first user is made
+    // here, without a code
+    const local = !st.scope || st.scope.kind !== 'domain';
+    titled('the first user');
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('user', 56)}</div>
       <h1>Create the first user</h1>
-      <p class="muted">${esc(forTitle)} has no users yet: the first one is yours. The password unlocks your keys and accounts; it is never stored. (Email sending is not set up here, so no code is needed for the first user.)</p>
+      <p class="muted">${esc(forTitle)} has no users yet: the first one is yours. The password unlocks your keys and accounts; it is never stored. (${local ? 'This login is local: it sends no email, so no code is needed.' : 'Email sending is not set up here, so no code is needed for the first user.'})</p>
       <form id="first">
         <div class="field"><label for="name">Account name</label><input id="name" type="text" ${kb('username')} maxlength="40" required></div>
         <div class="field"><label for="email">Email (optional)</label><input id="email" type="email" ${kb('email')} maxlength="254"></div>
@@ -142,6 +150,7 @@
 
   // step 1: the email
   function emailForm(first) {
+    titled('sign up');
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('user', 56)}</div>
       <h1>Sign up</h1>
@@ -165,6 +174,7 @@
 
   // step 2: the code from the email
   function codeForm() {
+    titled('sign up');
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('key', 56)}</div>
       <h1>Your code</h1>
@@ -196,6 +206,7 @@
 
   // step 3: the account name and the password
   function detailsForm() {
+    titled('sign up');
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('user', 56)}</div>
       <h1>Your account</h1>
@@ -232,7 +243,7 @@
       <dl class="facts">
         <dt>Created</dt><dd>${esc(when(me.createdAt))}</dd>
         <dt>Last sign-in</dt><dd>${esc(when(me.seenAt))}</dd>
-        <dt>Key-value database</dt><dd class="mono">${esc(s.file)} <span class="muted">(${esc(s.pairs)} pairs)</span></dd>
+        <dt>Key-value database</dt><dd class="mono">${esc(s.file)} <span class="muted">(${esc(s.pairs)} ${s.pairs === 1 ? 'pair' : 'pairs'})</span></dd>
         <dt>Users file</dt><dd class="mono">${esc(s.usersFile)}</dd>
         <dt>Unlock key</dt><dd><span class="mono">${esc(s.unlockFingerprint)}</span> <span class="muted">the salted hash of your password (${esc(kdf.name)} n=${esc(kdf.n)} r=${esc(kdf.r)} p=${esc(kdf.p)}, salt ${esc(s.salt)}); never stored, derived at sign-in</span></dd>
         <dt>Vault key</dt><dd><span class="mono">${esc(s.vaultFingerprint)}</span> <span class="muted">masks every value (AES-256-GCM); kept wrapped under the unlock key</span></dd>
@@ -245,8 +256,9 @@
         <td class="mono">${esc(p.name)}</td><td><span class="kind">${esc(p.kind)}</span></td><td>${esc(p.label)}</td>
         <td class="muted">${esc(when(p.updatedAt))}</td>
         <td class="value"><span class="masked">••••••••</span></td>
-        <td class="tools"><button type="button" class="reveal" title="Reveal the value here" aria-label="Reveal the value of ${esc(p.name)}">${icon('eye', 16)}</button>
-          <button type="button" class="remove danger" title="Remove this pair" aria-label="Remove the pair ${esc(p.name)}">${icon('trash', 16)}</button></td></tr>`).join('');
+        <td class="tools"><span class="acts"><button type="button" class="reveal" title="Reveal the value here" aria-label="Reveal the value of ${esc(p.name)}">${icon('eye', 16)}</button>
+          <button type="button" class="remove danger" title="Remove this pair" aria-label="Remove the pair ${esc(p.name)}">${icon('trash', 16)}</button></span>
+          <span class="ask" hidden>Remove it? <button type="button" class="yes danger">Remove</button><button type="button" class="no">Keep</button></span></td></tr>`).join('');
     return `<h2>Your keys and accounts</h2><table class="list pairs"><thead><tr><th>Name</th><th>Kind</th><th>Label</th><th>Updated</th><th>Value</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
@@ -264,7 +276,7 @@
   function addForm(known) {
     const options = known.filter((k) => !k.set).map((k) => `<option value="${esc(k.name)}">${esc(k.title || k.plugin)}: ${esc(k.label)}</option>`).join('');
     return `<form id="add" class="add-pair">
-      <div class="field"><label for="pName">Name</label><input id="pName" type="text" list="knownNames" ${kb('plain', 'next')} placeholder="massive-api-key" maxlength="64" required pattern="[a-z0-9][a-z0-9._-]*"><datalist id="knownNames">${options}</datalist></div>
+      <div class="field"><label for="pName">Name</label><input id="pName" type="text" list="knownNames" ${kb('plain', 'next')} placeholder="massive-api-key" maxlength="64" required pattern="[a-z0-9][a-z0-9._\\-]*"><datalist id="knownNames">${options}</datalist></div>
       <div class="field"><label for="pKind">Kind</label><select id="pKind">${KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}</select></div>
       <div class="field"><label for="pLabel">Label</label><input id="pLabel" type="text" ${kb('text', 'next')} placeholder="Massive, the paid plan" maxlength="80"></div>
       <div class="field"><label for="pValue">Value</label><input id="pValue" type="password" ${kb('secret')} maxlength="4096" required></div>
@@ -288,9 +300,17 @@
         try { const p = await api('GET', `api/pairs/${encodeURIComponent(name)}`); cell.textContent = p.value; cell.dataset.shown = '1'; }
         catch (e) { cell.innerHTML = `<span class="error">${esc(e.message)}</span>`; }
       });
-      tr.querySelector('.remove').addEventListener('click', async () => {
-        if (!window.confirm(`Remove the pair ${name}?`)) return;
-        await api('DELETE', `api/pairs/${encodeURIComponent(name)}`); render();
+      // a pair removed once asked on the page itself, in its row (0.12.1: the browser's own confirmation box was the one
+      // dialog the page did not draw, and a browser or a view that refuses those boxes never removed the pair); Keep or
+      // Escape takes the question back
+      const acts = tr.querySelector('.acts'), ask = tr.querySelector('.ask');
+      const asking = (on) => { acts.hidden = on; ask.hidden = !on; focusFirst(on ? ask.querySelector('.no') : tr.querySelector('.remove')); };
+      tr.querySelector('.remove').addEventListener('click', () => asking(true));
+      ask.querySelector('.no').addEventListener('click', () => asking(false));
+      ask.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); asking(false); } });
+      ask.querySelector('.yes').addEventListener('click', async () => {
+        try { await api('DELETE', `api/pairs/${encodeURIComponent(name)}`); render(); }
+        catch (err) { asking(false); cell.innerHTML = `<span class="error">${esc(err.message)}</span>`; }
       });
     });
     main.querySelectorAll('button.use').forEach((b) => b.addEventListener('click', () => {

@@ -65,9 +65,7 @@ def cmd_serve(args) -> int:
     folder = _dir(args)
     app = LoginApp(_root(args), log=_log(folder), namespace=_namespace(args), scope=_scope(args))
     port = args.port if args.port is not None else app.port()
-    mail = app.mailer.settings
-    print(f"login app for {app.title_for}: its page at {app.url(port)} (the folder {folder}; "
-          f"{'passkeys through ' + mail.host if mail.configured else 'no mail account set (LIMINAL_SMTP_*): no passkeys'}; "
+    print(f"login app for {app.title_for}: its page at {app.url(port)} (the folder {folder}; {app.mail_words()}; "
           "Ctrl+C to stop)", flush=True)
     quiet = float(os.environ.get("LIMINAL_QUIET_SECONDS") or QUIET_SECONDS) if args.until_quiet else None
     try:
@@ -87,11 +85,13 @@ def cmd_status(args) -> int:
     scope = _scope(args) or Scope.local(_root(args))
     port = LoginApp(_root(args), log=lambda m: None, namespace=_namespace(args), scope=scope).port() if not args.port else args.port
     mail = MailSettings.from_env()
+    account = (f"mail {'through ' + mail.host + ' as ' + (mail.user or mail.sender) if mail.configured else 'not set up (' + '; '.join(mail.problems()) + ')'}"
+               + (f"; signed under {mail.dkim_record}" if mail.signing else ""))
+    # a local login sends no email: the mail account is this machine's, there for `mail test` and `mail dkim` (0.12.1)
+    mail_part = f"no email (a local login); this machine's {account}" if scope.kind != "domain" else account
     print(f"login app for {_namespace(args)}: {len(names)} user(s) in {folder / 'users.db'}; "
           f"{'answering' if web.listening(port) else 'not running'} at port {port}; "
-          f"mail {'through ' + mail.host + ' as ' + (mail.user or mail.sender) if mail.configured else 'not set up (' + '; '.join(mail.problems()) + ')'}"
-          + (f"; signed under {mail.dkim_record}" if mail.signing else "")
-          + f"; {scope.label}" + (f" ({scope.path})" if scope.path else ""))
+          f"{mail_part}; {scope.label}" + (f" ({scope.path})" if scope.path else ""))
     for u in names:
         print(f"  {u['name']}: created {u['createdAt']}, last sign-in {u['seenAt'] or 'never'}"
               + (f", {u['email']}{' (verified)' if u['verified'] else ''}" if u["email"] else ""))

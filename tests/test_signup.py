@@ -250,3 +250,13 @@ def test_a_domain_login_takes_signups_only_with_an_email_server(folder, monkeypa
             local.close()
     finally:
         app.close()
+
+
+def test_a_domains_login_says_how_its_codes_go_out(served_mail):
+    """0.12.1: the start-up line and the status name the mail account for a domain's login, which sends the codes; a
+    local login names none (test_app)."""
+    app, port, lines, mailer = served_mail
+    st = _call(port, "GET", "/api/status")[1]
+    assert st["signup"]["local"] is False and st["signup"]["email"] is True
+    assert st["signup"]["host"] == "smtp.example.test" and st["signup"]["sender"] == "liminal@example.test"
+    assert app.mail_words() == "passkeys through smtp.example.test"

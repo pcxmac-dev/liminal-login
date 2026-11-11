@@ -65,7 +65,9 @@ def test_a_test_message_goes_through_the_mail_account_or_says_why_not(folder, mo
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": next(typed))
     assert cli.main(["user", "add", "Ada", "--email", "ada@example.test"]) == 0
     assert cli.main(["user", "list"]) == 0 and "ada@example.test" in capsys.readouterr().out
-    assert cli.main(["status"]) == 0 and "mail not set up" in capsys.readouterr().out
+    # a local login (this test's) sends no email: its status says so before this machine's mail account (0.12.1)
+    out = cli.main(["status"]) == 0 and capsys.readouterr().out
+    assert "no email (a local login); this machine's mail not set up" in out
 
 
 def test_the_mail_account_is_set_up_once_from_the_command_line_with_the_password_kept_apart(monkeypatch, capsys):

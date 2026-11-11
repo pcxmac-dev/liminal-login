@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.1 (2026-11-10)
+
+Six things a look at the page found, mended (the user: "Yes, fix them"):
+- The email field of the first-user form has a border and a background like the others (liminal-libs 1.42.1's
+  liminal.css): it had neither and looked missing.
+- The pair name's pattern is one a browser compiles: browsers read a pattern with the `v` flag, which refuses a bare `-`
+  in a class, so the page checked nothing (the server's check stayed).
+- The store says "1 pair", not "1 pairs".
+- The tab is named for where the page is (sign in, the first user, sign up, or who is signed in), not "sign in" throughout.
+- A pair is removed once asked in its row (Remove it? Remove / Keep; Escape takes it back), no longer through the
+  browser's own confirmation box, which some browsers and views refuse (the pair then never removed). A failed removal
+  says why in the row.
+- A local login names no mail account: it sends no email, yet its status named this machine's (the sender's address
+  among them) and its start-up line said "passkeys through direct". `/api/status`'s `signup` carries `local`; the
+  first-user form says the login is local; `liminal-login status` says "no email (a local login)" before this machine's
+  mail account (the one `mail test` and `mail dkim` use).
+
 ## 0.12.0 (2026-11-10)
 
 Touch screens and the on-screen keyboard (the user: "let's do an update. I want to support touch as well as mouse

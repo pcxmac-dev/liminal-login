@@ -250,3 +250,50 @@ def test_the_page_answers_a_finger_and_an_on_screen_keyboard(served):
     assert 'aria-label="Reveal the value of ${esc(p.name)}"' in page and 'aria-label="Remove the pair ${esc(p.name)}"' in page
     css = _call(port, "GET", "/login.css")[1].decode("utf-8")
     assert ":hover" not in css and "@media (max-width: 700px) { .user-head { flex-wrap: wrap; } }" in css
+
+
+def test_what_a_look_at_the_page_found_is_mended(served):
+    """0.12.1 (the user, 2026-11-10, of six things a look at the page found: "Yes, fix them"): the email field filled and
+    bordered like every field typed into (the library's liminal.css, 1.42.1: it had neither and looked missing); the pair
+    name's pattern one a browser compiles (it reads a pattern with the `v` flag, which refuses a bare - in a class, and
+    then checks nothing); "1 pair", not "1 pairs"; the tab named for where the page is, not "sign in" throughout; a pair
+    removed once asked in its row, never through the browser's own confirmation box (which some browsers and views
+    refuse); a local login's status and start-up line naming no mail account, since it sends no email. No JavaScript
+    runs here: what the page is drawn with."""
+    import re
+
+    from conftest import FakeMailer
+
+    app, port, lines = served
+    css = _call(port, "GET", "/liminal.css")[1].decode("utf-8")
+    rule = re.search(r'\ninput\[type="text"\], input\[type="password"\][^{]*\{([^}]*)\}', css)
+    assert rule and 'input[type="email"]' in rule.group(0) and "background: var(--bg)" in rule.group(1)
+    assert "border-color: var(--border)" in rule.group(1)
+    page = _call(port, "GET", "/login.js")[1].decode("utf-8")
+    patterns = re.findall(r'pattern="([^"]*)"', page)
+    assert patterns
+    for written in patterns:
+        value = written.replace("\\\\", "\\")  # the template literal's two backslashes are the attribute's one
+        re.compile(value)
+        for inside in re.findall(r"\[((?:\\.|[^\]\\])*)\]", value):  # each class: no - left once escapes and ranges are out
+            assert "-" not in re.sub(r".-.", "", re.sub(r"\\.", "", inside)), written
+    # and the check itself: the old pattern's bare - is caught
+    assert "-" in re.sub(r".-.", "", re.sub(r"\\.", "", "a-z0-9._-"))
+    assert "(${esc(s.pairs)} ${s.pairs === 1 ? 'pair' : 'pairs'})" in page
+    assert "titled(me.name);" in page and "titled('the first user');" in page and page.count("titled('sign up');") == 3
+    assert "titled('sign in');" in page and "document.title = `${forTitle}: sign in`" not in page
+    assert not re.search(r"\b(window\.)?(confirm|alert)\(", page)
+    assert ('<span class="ask" hidden>Remove it? <button type="button" class="yes danger">Remove</button>'
+            '<button type="button" class="no">Keep</button></span>') in page
+    assert "if (e.key === 'Escape') { e.preventDefault(); asking(false); }" in page
+    # a local login: no mail account named, even when this machine has one
+    st = _call(port, "GET", "/api/status")[1]
+    assert st["signup"] == {"email": False, "local": True, "configured": False, "lastSent": None, "why": app.signup_closed_why()}
+    assert app.mail_words() == "a local login: no email" and st["scope"]["kind"] == "local"
+    other = LoginApp(app.root / "other", log=lambda m: None, failure_delay=0, mailer=FakeMailer(configured=True))
+    try:
+        said = other.signup_status()
+        assert said["local"] is True and "host" not in said and "sender" not in said and other.mail_words() == "a local login: no email"
+    finally:
+        other.close()
+    assert "This login is local: it sends no email, so no code is needed." in page

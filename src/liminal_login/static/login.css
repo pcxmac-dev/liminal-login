@@ -9,6 +9,7 @@ body.embedded #rail { display: none; }  /* inside another app's page (?embedded=
 .pairs td.value { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 12px;
   max-width: 320px; overflow-wrap: anywhere; }
 .pairs td.tools { white-space: nowrap; text-align: right; }
+.pairs td.tools .ask button { margin-left: 4px; }  /* 0.12.1: Remove it? Remove / Keep, asked in the row */
 .pairs .kind { display: inline-block; padding: 1px 6px; border: 1px solid var(--border); border-radius: 9px;
   font-size: 11px; color: var(--muted); }
 .add-pair { display: grid; grid-template-columns: 1.4fr 0.8fr 1fr 1.6fr auto; gap: 8px; align-items: end; margin-top: 8px; }
