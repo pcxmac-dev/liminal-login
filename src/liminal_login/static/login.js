@@ -124,7 +124,7 @@
       <div class="login-icon">${icon('lambda', 56)}</div>
       <h1>Sign in to ${esc(forTitle)}</h1>
       ${st.scope ? `<p class="muted scope">${esc(st.scope.label)}</p>` : ''}
-      <p class="muted">Your account name (or email) and password open your keys and accounts.</p>
+      <p class="muted">Your account name (or email) and password open your keys and accounts. A user of another login signs in as name@their.domain: theirs does the work, over https.</p>
       <form id="signin">
         <div class="field"><label for="name">Account name or email</label>
           <input id="name" type="text" ${kb('username', { inputmode: 'email' })} maxlength="254" required></div>
@@ -280,6 +280,7 @@
       <dl class="facts">
         <dt>Created</dt><dd>${esc(when(me.createdAt))}</dd>
         <dt>Last sign-in</dt><dd>${esc(when(me.seenAt))}</dd>
+        ${me.remote ? `<dt>Kept at</dt><dd><span class="mono">${esc(me.remote)}</span> <span class="muted">your own login: everything you ask is made there, ${me.remote.startsWith('https:') ? 'over https' : 'on this machine'}</span></dd>` : ''}
         <dt>Key-value database</dt><dd class="mono">${esc(s.file)} <span class="muted">(${esc(s.pairs)} ${s.pairs === 1 ? 'pair' : 'pairs'})</span></dd>
         <dt>Users file</dt><dd class="mono">${esc(s.usersFile)}</dd>
         <dt>Unlock key</dt><dd><span class="mono">${esc(s.unlockFingerprint)}</span> <span class="muted">the salted hash of your password (${esc(kdf.name)} n=${esc(kdf.n)} r=${esc(kdf.r)} p=${esc(kdf.p)}, salt ${esc(s.salt)}); never stored, derived at sign-in</span></dd>

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.15.0 (2026-11-10)
+
+The users of other logins (the user: "make sure every login instance has a database, it's location can be remote"; "so
+domain should be local or some domain remote.tld"; "login apps can connect to remote login apps"; "and shift context
+to the remote execution"; "remote users are like email format user@remote.domain.tld"; "IPC turns in to encrypted
+internet comms"):
+- Every login keeps its own users in its own database, as before. A user of another login signs in here as
+  name@their.domain: their login does the sign-in (their password, or their login's secret user by the lambda), over
+  https, and everything they ask after (who they are, their password, their pairs) is asked of it with the session it
+  gave; their sign-out here signs them out there too, and a session ended there ends here. Nothing of theirs is kept
+  here but that session's token, behind this login's own cookie.
+- Their login answers at https://their.domain unless liminal-login.cfg's `[remotes]` (or LIMINAL_LOGIN_REMOTES) names
+  another address; never over plain http but to this machine.
+- name@this.domain (a domain's login) is one of its own users; so is anyone here whose email is the address typed.
+- The status says `remote`; `/api/me` gives their name@their.domain and `remote`; the card says where they are kept;
+  the pairs a plugin here asks for are marked from their store there; this login's users are not listed to them.
+
 ## 0.14.1 (2026-11-10)
 
 The secret user's name and password are values in the login's database (the user: "the user and the password should be

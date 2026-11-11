@@ -176,6 +176,11 @@ class UserStore:
         return [{"name": r["name"], "createdAt": r["created_at"], "seenAt": r["seen_at"], "email": r["email"],
                  "verified": r["verified_at"] is not None} for r in rows]
 
+    def has_email(self, email: str) -> bool:
+        """Whether a user here signs in with this address (an @ typed may be theirs, not another login's user)."""
+        with self._lock:
+            return self._con.execute("SELECT 1 FROM users WHERE email = ?", (str(email or "").strip(),)).fetchone() is not None
+
     def exists(self, name: str) -> bool:
         with self._lock:
             return self._con.execute("SELECT 1 FROM users WHERE name = ?", (str(name or "").strip(),)).fetchone() is not None

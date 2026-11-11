@@ -406,3 +406,78 @@ def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, fo
     assert "!== 'secret'" not in page and "catch (err) { if (err.status === 400 || err.status === 403) signInForm(st, name);" in page
     css = _call(port, "GET", "/login.css")[1].decode("utf-8")
     assert "button.login-icon {" in css and ":hover" not in css  # a mouse's highlight is the library's, in (hover: hover)
+
+
+def test_a_user_of_another_login_signs_in_there_and_everything_they_ask_is_made_there(folder):
+    """0.15.0 (the user, 2026-11-10: "make sure every login instance has a database, it's location can be remote"; "login
+    apps can connect to remote login apps"; "and shift context to the remote execution"; "remote users are like email
+    format user@remote.domain.tld"; "IPC turns in to encrypted internet comms"): every login keeps its own users; one of
+    another login signs in as name@their.domain at their own login (here over http to this machine, standing in for
+    https), which does everything after: who they are, their pairs, their sign-out; nothing of theirs is kept here but
+    the session it gave. A user here with that address as their email, or name@this.domain, is this login's own."""
+    import socket
+
+    from conftest import FakeMailer, _port
+    from liminal_libs.apps import SESSION_HEADER, Scope
+
+    rlines: list[str] = []
+    llines: list[str] = []
+    remote = LoginApp(folder / "remote", log=rlines.append, failure_delay=0)  # another login, standing in for remote.test
+    base = f"http://127.0.0.1:{_port(remote.start(0))}"
+    local = LoginApp(folder / "local", log=llines.append, failure_delay=0, superclass="charts", remotes={"remote.test": base})
+    lport = _port(local.start(0))
+    cookie = "liminal_login_charts"  # this login's own name for the session, whatever the other's is
+    try:
+        remote.users.create("Ada", "correct horse battery")
+        assert _call(lport, "POST", "/api/sign-in", {"name": "ada@remote.test", "password": "wrong password"})[0] == 401
+        status, data, r = _call(lport, "POST", "/api/sign-in", {"name": "ada@Remote.Test", "password": "correct horse battery"})
+        assert status == 200 and data["user"] == {"name": "Ada@remote.test", "remote": base}
+        assert r.getheader("Set-Cookie").startswith(f"{cookie}={data['token']}")
+        session = {"Cookie": f"{cookie}={data['token']}"}
+        assert local.users.count() == 0 and remote.sessions() == ["Ada"]  # nothing of theirs here; signed in there
+        st = _call(lport, "GET", "/api/status", headers=session)[1]
+        assert st["signedIn"] is True and st["name"] == "Ada@remote.test" and st["remote"] == base
+        me = _call(lport, "GET", "/api/me", headers=session)[1]
+        assert me["name"] == "Ada@remote.test" and me["remote"] == base and me["store"]["pairs"] == 0
+        assert _call(lport, "PUT", "/api/pairs/acme-api-key", {"value": "a-test-value", "kind": "key"}, headers=session)[0] == 200
+        assert _call(lport, "GET", "/api/pairs/acme-api-key", headers=session)[1]["value"] == "a-test-value"
+        assert [p["name"] for p in _call(lport, "GET", "/api/pairs", headers=session)[1]["pairs"]] == ["acme-api-key"]
+        tok = _call(int(base.rsplit(":", 1)[1]), "POST", "/api/sign-in", {"name": "Ada", "password": "correct horse battery"})[1]["token"]
+        assert _call(int(base.rsplit(":", 1)[1]), "GET", "/api/pairs/acme-api-key", headers={SESSION_HEADER: tok})[1]["value"] == "a-test-value"
+        assert _call(lport, "GET", "/api/users", headers=session)[0] == 403  # this login's users are not theirs to list
+        assert len(remote._sessions) == 2
+        status, _, r = _call(lport, "POST", "/api/sign-out", headers=session)  # out here, and out there
+        assert status == 200 and "Max-Age=0" in r.getheader("Set-Cookie") and len(remote._sessions) == 1
+        assert _call(lport, "GET", "/api/me", headers=session)[0] == 401
+        status, data, _ = _call(lport, "POST", "/api/sign-in/secret", {"name": "secret@remote.test"})  # their secret user
+        assert status == 200 and data["user"]["name"] == "secret@remote.test" and data["passwordless"] is True
+        assert remote.users.secret_kept() is not None and local.users.secret_kept() is None
+        local.users.create("Bo", "bo's own password", "bo@remote.test")  # a user here with that address: this login's own
+        status, data, _ = _call(lport, "POST", "/api/sign-in", {"name": "bo@remote.test", "password": "bo's own password"})
+        assert status == 200 and data["user"]["name"] == "Bo"
+        assert any("Ada@remote.test signed in at" in m for m in llines)
+        assert not any("correct horse battery" in m or "a-test-value" in m for m in llines + rlines)
+    finally:
+        local.close()
+        remote.close()
+    with socket.socket() as s:  # a login that does not answer: said
+        s.bind(("127.0.0.1", 0))
+        away = s.getsockname()[1]
+    gone = LoginApp(folder / "gone", log=lambda m: None, failure_delay=0, remotes={"gone.test": f"http://127.0.0.1:{away}"})
+    try:
+        status, data, _ = _call(_port(gone.start(0)), "POST", "/api/sign-in", {"name": "ada@gone.test", "password": "correct horse battery"})
+        assert status == 503 and "does not answer" in data["error"]
+    finally:
+        gone.close()
+    dom = LoginApp(folder / "dom", log=lambda m: None, failure_delay=0, mailer=FakeMailer(configured=False),
+                   scope=Scope.for_domain("example.test"))
+    try:  # name@this.domain is this login's own user
+        dom.users.create("bob", "bob's own password")
+        assert _call(_port(dom.start(0)), "POST", "/api/sign-in", {"name": "bob@example.test", "password": "bob's own password"})[1]["user"]["name"] == "bob"
+        assert dom.remote_url("remote.tld") == "https://remote.tld"  # a domain not named answers at its own address
+    finally:
+        dom.close()
+    with pytest.raises(ValueError, match="https"):  # another machine only over https
+        LoginApp(folder / "plain", log=lambda m: None, remotes={"remote.tld": "http://remote.tld"})
+    page = (LoginApp.STATIC / "login.js").read_text(encoding="utf-8")
+    assert "${me.remote ? `<dt>Kept at</dt>" in page and "A user of another login signs in as name@their.domain" in page

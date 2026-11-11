@@ -24,6 +24,12 @@ The way in, for now: type `secret` as the user and click the lambda (or press En
 without a password on a local login, made the first time. Its keys are not protected by a password: keep nothing you
 care about there. Sign in (a password) and Sign up are beside it.
 
+The users of other logins sign in as name@their.domain: their own login does the sign-in and everything they
+ask after, over https (at https://their.domain, or the address `[remotes]` in liminal-login.cfg names:
+`their.domain = https://login.their.domain:8443`). Every login keeps its own users; nothing of theirs is kept here
+but the session their login gave. A remote login is reached the way a page reaches it: through a TLS front (Caddy,
+nginx) on its machine that passes requests on to its 127.0.0.1 port.
+
 Signing up is three steps: your email (a six-digit code goes to it, when a mail account is set, below),
 the code, then your account name and password. The first visit offers it; later accounts come from
 "Sign up" on the sign-in page; `user add` makes one from the command line without a code, and without a

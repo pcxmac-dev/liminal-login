@@ -30,13 +30,16 @@ import urllib.request
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlencode
 
 from liminal_libs import layout
-from liminal_libs.apps import (PAIRS_PATH, SESSION_HEADER, SUPER_TITLE_VAR, SUPER_URL_VAR, SUPER_VAR, App, Refused,
-                               Scope)
+from liminal_libs.apps import (PAIRS_PATH, REMOTES_VAR, SESSION_HEADER, SUPER_TITLE_VAR, SUPER_URL_VAR, SUPER_VAR, App,
+                               Refused, Scope, remotes_from)
+from liminal_libs.apps import remote_url as remote_address
 from liminal_libs.layout import data_dir
 from liminal_libs.mail import MailError, Mailer, mask, mx_records
+from liminal_libs.web import WRITE_HEADER
+from . import __version__
 from .users import CODE_MINUTES, User, UserStore
 from .vault import PAIR_NAME, KeyPairStore, store_file
 
@@ -45,6 +48,11 @@ FOR_VAR = SUPER_VAR  # LIMINAL_LOGIN_FOR: the app that inherits this login, when
 NAMESPACE = re.compile(r"^[a-z][a-z0-9-]{1,23}$")  # a superclass's short name
 RESERVED = frozenset({"users", "logs", "dkim"})  # the login's own folders: never a superclass's
 PAIRS_SECONDS = 60.0  # the pairs a superclass's plugins ask for, asked of it again after this long
+REMOTE_SECONDS = 15.0  # how long a remote login has to answer
+REMOTE_MAX = 1_000_000  # the most of an answer read from it
+# what a remote user's session asks of their own login (0.15.0): who they are, their password, their pairs; the rest
+# (the status, signing in and out, signing up, the pairs a plugin here asks for) is this login's
+REMOTE_ROUTES = ("/api/me", "/api/me/password", "/api/pairs")
 SESSION_MINUTES_VAR = "LIMINAL_LOGIN_SESSION_MINUTES"
 SESSION_MINUTES = 480.0  # a session ends after this long without a request
 FAILURE_DELAY_S = 0.5  # after a wrong name or password: no guessing at speed
@@ -123,6 +131,30 @@ class Session:
         self.vault.close()
 
 
+@dataclass
+class RemoteUser:
+    name: str  # as they signed in here: name@their.domain
+
+
+@dataclass
+class RemoteSession:
+    """A session of a user of another login (0.15.0; the user, 2026-11-10: "login apps can connect to remote login apps";
+    "and shift context to the remote execution"; "remote users are like email format user@remote.domain.tld"; "IPC turns
+    in to encrypted internet comms"): their own login did the sign-in, over https, and does everything they ask after
+    (who they are, their pairs) with the session it gave; nothing of theirs is kept here but that session's token."""
+
+    token: str
+    user: RemoteUser
+    remote: str  # their login's address
+    remote_token: str  # the session it gave
+    last: float
+    passwordless: bool = False
+    vault = None  # their pairs are theirs, at their login
+
+    def close(self) -> None:
+        pass
+
+
 class LoginApp(App):
     NAME, ICON = "login", "lambda"  # Liminal's sign (the user, 2026-11-10: "replace all user icons (login app) with the lambda sign")
     PORT = 8795
@@ -131,7 +163,7 @@ class LoginApp(App):
     API = "1.3"  # 1.3 (0.13.0): on its own unless inherited; `for` null on its own, `superclass` in the status
 
     def __init__(self, directory: Path | None = None, log=print, failure_delay: float = FAILURE_DELAY_S, mailer=None,
-                 superclass: Superclass | str | None = None, scope: Scope | None = None):
+                 superclass: Superclass | str | None = None, scope: Scope | None = None, remotes: dict | None = None):
         super().__init__(log)
         # the app that inherits this login, as it said (a Superclass, or its short name), else LIMINAL_LOGIN_FOR; none:
         # the login on its own
@@ -159,6 +191,11 @@ class LoginApp(App):
         self._lock = threading.Lock()
         self._secret_lock = threading.Lock()  # the secret user made once, however many ask at the same time
         self._pairs_asked: tuple[float, list[dict]] | None = None  # the superclass's word on its plugins' pairs, and when
+        # where the logins of other domains answer (0.15.0): the file's [remotes], LIMINAL_LOGIN_REMOTES, then those given;
+        # a domain not named answers at https://its.domain
+        self.remotes = {**self.scope.remotes, **remotes_from(os.environ.get(REMOTES_VAR)),
+                        **{k.lower().strip("."): remote_address(v) for k, v in (remotes or {}).items()}}
+        self._remote_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # https, its certificate checked
 
     @property
     def namespace(self) -> str | None:
@@ -263,9 +300,13 @@ class LoginApp(App):
             return s
 
     def _require(self, handler) -> Session:
+        """The request's session of one of this login's own users (a user of another login is answered by their own:
+        what they may ask is passed there before this)."""
         s = self.session(handler)
         if s is None:
             raise Refused(HTTPStatus.UNAUTHORIZED, "not signed in")
+        if isinstance(s, RemoteSession):
+            raise Refused(HTTPStatus.FORBIDDEN, f"a user of another login: ask your own ({s.remote})")
         return s
 
     def _open(self, user: User) -> Session:
@@ -311,11 +352,100 @@ class LoginApp(App):
         self.log(f"login: {user.name} signed in")
         return status, {"token": s.token, "user": user.as_dict()}, self._cookie(s.token)
 
+    # -- the users of other logins (0.15.0): name@their.domain signs in at their own login, which does the work -----
+    def remote_url(self, host: str) -> str:
+        """Where the login of `host` answers: named in [remotes] (this login's file or LIMINAL_LOGIN_REMOTES), else
+        https://host."""
+        host = str(host or "").strip().lower().strip(".")
+        return remote_address(self.remotes.get(host) or host)
+
+    def remote_of(self, who) -> tuple[str, str] | None:
+        """(name, domain) when `who` is a user of another login, name@their.domain: not this login's own domain, and
+        no user here signs in with that address as their email; None for one of this login's own."""
+        who = str(who or "").strip()
+        name, at, host = who.rpartition("@")
+        host = host.strip().lower().strip(".")
+        if not at or not name or not host:
+            return None
+        if self.scope.kind == "domain" and host == self.scope.domain:
+            return None
+        if self.users.has_email(who):
+            return None
+        return name, host
+
+    def own_name(self, who) -> str:
+        """name@this.domain as the name alone (one of this login's own users), unless a user here has that address as
+        their email."""
+        who = str(who or "").strip()
+        name, at, host = who.rpartition("@")
+        if at and name and self.scope.kind == "domain" and host.strip().lower().strip(".") == self.scope.domain \
+                and not self.users.has_email(who):
+            return name
+        return who
+
+    def _remote_call(self, base: str, method: str, path: str, body: dict | None = None, token: str | None = None,
+                     query: dict | None = None) -> tuple[int, dict]:
+        """One ask of a remote login, over https (http only to this machine): its status and its JSON; never through a
+        proxy; the session it gave in the session header. 503 in words when it does not answer."""
+        url = base + path + (("?" + urlencode(query)) if query else "")
+        headers = {"Accept": "application/json", "User-Agent": f"liminal-login/{__version__}"}
+        if token:
+            headers[SESSION_HEADER] = token
+        data = None
+        if method != "GET":
+            headers[WRITE_HEADER] = "1"
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body or {}).encode("utf-8")
+        request = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with self._remote_opener.open(request, timeout=REMOTE_SECONDS) as r:
+                status, raw = r.status, r.read(REMOTE_MAX)
+        except urllib.error.HTTPError as e:
+            status, raw = e.code, e.read(REMOTE_MAX)
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
+            raise Refused(HTTPStatus.SERVICE_UNAVAILABLE, f"the login at {base} does not answer: {getattr(e, 'reason', e)}") from None
+        try:
+            out = json.loads(raw) if raw else {}
+        except ValueError:
+            out = {"error": f"the login at {base} answered something that is not JSON"}
+        return status, (out if isinstance(out, dict) else {"error": f"the login at {base} answered something unexpected"})
+
+    def _remote_sign_in(self, name: str, host: str, body: dict, path: str = "/api/sign-in"):
+        """A user of another login signed in there (their password, or their login's secret user), the session it gave
+        kept here behind one of this login's own; their answer passed back when it says no."""
+        base = self.remote_url(host)
+        payload = {"name": name, **({"password": body.get("password")} if path == "/api/sign-in" else {})}
+        status, data = self._remote_call(base, "POST", path, payload)
+        if status != 200 or not data.get("token"):
+            self.log(f"login: a sign-in at {base} was refused ({status})")
+            raise Refused(status if 400 <= status < 600 else HTTPStatus.BAD_GATEWAY,
+                          str(data.get("error") or f"the login at {base} said no"))
+        who = f"{(data.get('user') or {}).get('name') or name}@{host}"
+        s = RemoteSession(secrets.token_urlsafe(32), RemoteUser(who), base, str(data["token"]), time.monotonic(),
+                          bool(data.get("passwordless")))
+        with self._lock:
+            self._sessions[s.token] = s
+        self.log(f"login: {who} signed in at {base}")
+        return 200, {"token": s.token, "user": {"name": who, "remote": base}, "passwordless": s.passwordless}, self._cookie(s.token)
+
+    def _remote_ask(self, s: RemoteSession, method: str, path: str, query: dict, body: dict | None):
+        """What a remote user asks, asked of their own login with its session; when it has ended there, it ends here."""
+        status, data = self._remote_call(s.remote, method, path, body, s.remote_token, query)
+        if status == HTTPStatus.UNAUTHORIZED:
+            self._end(s.token)
+            return 401, {"error": f"your session at {s.remote} has ended: sign in again"}, self._cookie(None)
+        if path == "/api/me" and status == 200:
+            data = {**data, "name": s.user.name, "remote": s.remote, "passwordless": s.passwordless or bool(data.get("passwordless"))}
+        return status, data
+
     def _secret_sign_in(self, body: dict):
         """The secret user in without a password: a local login only. The name typed is checked against the one the
         database keeps (`secret` before it is made); the user is made the first time, its password a random one kept in
         the database; refused when a user of that name has a password of their own. Any other name: 400 (the page goes
-        on to its password)."""
+        on to its password). name@their.domain: their login's own secret user, asked there."""
+        remote = self.remote_of(body.get("name"))
+        if remote is not None:
+            return self._remote_sign_in(*remote, body, "/api/sign-in/secret")
         if self.scope.kind == "domain":
             raise Refused(HTTPStatus.FORBIDDEN, "the secret user is only for a local login: sign in with your password")
         typed = str(body.get("name") or "").strip()
@@ -342,9 +472,14 @@ class LoginApp(App):
     # -- the routes ------------------------------------------------------------------------------
     def api(self, handler, method: str, path: str, query: dict, body: dict | None):
         body = body or {}
+        if path in REMOTE_ROUTES or (path.startswith("/api/pairs/") and path != "/api/pairs/known"):
+            s = self.session(handler)
+            if isinstance(s, RemoteSession):  # a user of another login: asked there (0.15.0)
+                return self._remote_ask(s, method, path, query, body if method != "GET" else None)
         if path == "/api/status" and method == "GET":
             s = self.session(handler)
             return 200, {"users": self.users.count(), "signedIn": s is not None, "name": s.user.name if s else None,
+                         "remote": s.remote if isinstance(s, RemoteSession) else None,
                          "for": self.namespace, "forTitle": self.title_for,
                          "superclass": self.superclass.describe() if self.superclass is not None else None,
                          "scope": self.scope.describe(),
@@ -355,8 +490,8 @@ class LoginApp(App):
         if path == "/api/users" and method == "POST":
             # a domain's login: a user signed in adds one, everyone else signs up with a code; a local login: anyone at
             # this machine signs up on the page (0.14.0, the user: "signup and sign-in should be options too")
-            if self.users.count() and self.session(handler) is None and self.scope.kind == "domain":
-                raise Refused(HTTPStatus.UNAUTHORIZED, "sign in to add a user")
+            if self.users.count() and not isinstance(self.session(handler), Session) and self.scope.kind == "domain":
+                raise Refused(HTTPStatus.UNAUTHORIZED, "sign in to add a user")  # one of its own users: not another login's
             if not self.users.count() and self.signup_open():
                 raise Refused(HTTPStatus.CONFLICT, "the first account is made with a code sent to your email (sign up)")
             try:
@@ -376,7 +511,10 @@ class LoginApp(App):
         if path == "/api/signup/complete" and method == "POST":
             return self._complete(body)
         if path == "/api/sign-in" and method == "POST":
-            user = self.users.verify(body.get("name"), body.get("password"))
+            remote = self.remote_of(body.get("name"))
+            if remote is not None:  # name@their.domain: their own login signs them in, and does the work after
+                return self._remote_sign_in(*remote, body)
+            user = self.users.verify(self.own_name(body.get("name")), body.get("password"))
             if user is None:
                 if self.failure_delay:
                     time.sleep(self.failure_delay)
@@ -388,6 +526,11 @@ class LoginApp(App):
                 s = self._end(token)
                 if s is not None:
                     self.log(f"login: {s.user.name} signed out")
+                if isinstance(s, RemoteSession):  # and theirs at their own login
+                    try:
+                        self._remote_call(s.remote, "POST", "/api/sign-out", {}, s.remote_token)
+                    except Refused:
+                        self.log(f"login: {s.remote} did not answer the sign-out; its session ends there by itself")
             return 200, {"signedOut": True}, self._cookie(None)
         if path == "/api/me" and method == "GET":
             return 200, self._me(self._require(handler))
@@ -402,7 +545,12 @@ class LoginApp(App):
         if path == "/api/pairs" and method == "GET":
             return 200, {"pairs": self._require(handler).vault.names()}
         if path == "/api/pairs/known" and method == "GET":
-            return 200, {"known": self.known_pairs(self.session(handler))}
+            s = self.session(handler)
+            if isinstance(s, RemoteSession):  # the pairs a plugin here asks for, set or not in their own login's store
+                status, data = self._remote_call(s.remote, "GET", "/api/pairs", None, s.remote_token)
+                have = {p.get("name") for p in data.get("pairs", []) if isinstance(p, dict)} if status == 200 else set()
+                return 200, {"known": [{**r, "set": r["name"] in have} for r in self.superclass_pairs()]}
+            return 200, {"known": self.known_pairs(s)}
         if path.startswith("/api/pairs/"):
             s = self._require(handler)
             name = unquote(path[len("/api/pairs/"):])
