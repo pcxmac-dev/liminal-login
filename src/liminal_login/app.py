@@ -23,6 +23,7 @@ import json
 import os
 import re
 import secrets
+import ssl
 import threading
 import time
 import urllib.error
@@ -49,6 +50,7 @@ NAMESPACE = re.compile(r"^[a-z][a-z0-9-]{1,23}$")  # a superclass's short name
 RESERVED = frozenset({"users", "logs", "dkim"})  # the login's own folders: never a superclass's
 PAIRS_SECONDS = 60.0  # the pairs a superclass's plugins ask for, asked of it again after this long
 REMOTE_SECONDS = 15.0  # how long a remote login has to answer
+CA_VAR = "LIMINAL_LOGIN_CA"  # a certificate authority (PEM) trusted for remote logins besides the system's: a test front's own
 REMOTE_MAX = 1_000_000  # the most of an answer read from it
 # what a remote user's session asks of their own login (0.15.0): who they are, their password, their pairs; the rest
 # (the status, signing in and out, signing up, the pairs a plugin here asks for) is this login's
@@ -107,6 +109,20 @@ def superclass_of(name=None, title=None, url=None, env=None) -> Superclass | Non
     if where and not where.lower().startswith(("http://", "https://")):
         raise ValueError(f"the address of the app that inherits a login is an http(s) URL, not {where!r}")
     return Superclass(raw, shown, where)
+
+
+def remote_tls() -> ssl.SSLContext:
+    """How a remote login's certificate is checked: against the system's authorities and, when LIMINAL_LOGIN_CA names one,
+    that authority too (0.15.2: a remote login in Docker behind Caddy's own authority, docker/; its root certificate
+    copied out of the front once). ValueError when the file named cannot be read as one."""
+    context = ssl.create_default_context()
+    ca = (os.environ.get(CA_VAR) or "").strip()
+    if ca:
+        try:
+            context.load_verify_locations(cafile=ca)
+        except (OSError, ssl.SSLError) as e:
+            raise ValueError(f"{CA_VAR} names no certificate authority that can be read ({ca}): {e}") from None
+    return context
 
 
 def folder_for(root: Path, scope: Scope, superclass: Superclass | None = None) -> Path:
@@ -195,7 +211,8 @@ class LoginApp(App):
         # a domain not named answers at https://its.domain
         self.remotes = {**self.scope.remotes, **remotes_from(os.environ.get(REMOTES_VAR)),
                         **{k.lower().strip("."): remote_address(v) for k, v in (remotes or {}).items()}}
-        self._remote_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # https, its certificate checked
+        self._remote_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),  # https, its certificate checked
+                                                          urllib.request.HTTPSHandler(context=remote_tls()))
 
     @property
     def namespace(self) -> str | None:

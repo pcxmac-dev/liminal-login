@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.15.2 (2026-11-10)
+
+A remote login in Docker, prepared (the user: "we are going to use docker to setup such a remote / testing webserver";
+"the platform app will be able to setup docker instances"; "just prepare for using docker on platform as a way to login
+remotely with only the login-app"; "the login-app can login remotly to any liminal app that includes the platform app
+object"). Nothing is built or run yet; the platform's Docker plugin will set it up on the engine chosen there.
+- `docker/`: a Dockerfile building the login app from this checkout and liminal-libs' (compose gives it as the `libs`
+  context: the code here, pushed or not), its users in the volume /data; compose.yaml with the app and a Caddy https
+  front sharing its network, so the app still answers only 127.0.0.1; the Caddyfile (Caddy's own authority signs for
+  LIMINAL_REMOTE_HOST, `tls internal`), which hands each request to the app with the app's own address as its Host and
+  no Origin (the browser's Sec-Fetch-Site and the write header still guard it); the container's liminal-login.cfg, local
+  to /data (no email: its users made on its own page or by its secret user).
+- LIMINAL_LOGIN_CA: a certificate authority (PEM) a login trusts for remote logins besides the system's, the front's own
+  copied out of it once; one that cannot be read is said when the app starts.
+
 ## 0.15.1 (2026-11-10)
 
 The secret user's current password is the key the login keeps (the user: "for secret user the current password should

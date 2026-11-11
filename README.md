@@ -30,6 +30,12 @@ ask after, over https (at https://their.domain, or the address `[remotes]` in li
 but the session their login gave. A remote login is reached the way a page reaches it: through a TLS front (Caddy,
 nginx) on its machine that passes requests on to its 127.0.0.1 port.
 
+A remote login in Docker (`docker/`, for the platform's Docker plugin to set up; by hand `docker compose up -d
+--build` in that folder): the login app alone, built from this checkout and liminal-libs', behind a Caddy https front
+that shares its network. Another login reaches its users as name@<its domain> with `[remotes]` naming
+`https://<LIMINAL_REMOTE_HOST>:<LIMINAL_REMOTE_PORT>` and LIMINAL_LOGIN_CA trusting the front's authority
+(`docker compose cp front:/data/caddy/pki/authorities/local/root.crt ./front-root.crt`).
+
 Signing up is three steps: your email (a six-digit code goes to it, when a mail account is set, below),
 the code, then your account name and password. The first visit offers it; later accounts come from
 "Sign up" on the sign-in page; `user add` makes one from the command line without a code, and without a

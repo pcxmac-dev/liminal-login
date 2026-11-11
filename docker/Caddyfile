@@ -1,0 +1,12 @@
+# The remote login's https front (compose.yaml). Caddy's own certificate authority signs for the host (`tls internal`;
+# a host with public DNS may take a public certificate instead: drop the tls line). The login app answers only its own
+# machine, so each request is handed to it as a page of that machine would send it: the app's own address as its Host,
+# and no Origin. The browser's Sec-Fetch-Site still tells the app whether a request came from its own page, and every
+# write still needs the app's own header, which no other site's page can send.
+{$LIMINAL_REMOTE_HOST}:8443 {
+	tls internal
+	reverse_proxy 127.0.0.1:8795 {
+		header_up Host 127.0.0.1:8795
+		header_up -Origin
+	}
+}
