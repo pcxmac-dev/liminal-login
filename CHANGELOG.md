@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.3 (2026-11-10)
+
+Held in another app's page (?embedded=1), the login draws no frame or colour of its own (the user, of a lighter box
+drawn all round the platform's sign-in: "Yes, fix both"): the page's padding showed the frame's colour as a band round
+the login's panel, from the top of the window to the bottom on the sign-in an app opens on, and inside your account and
+the charts' bound view; in Light and Paper the panel itself is lighter than the page. Embedded, the page has no padding
+and is see-through, its body and its panel alike: behind it the colour of the place holding it, in every theme. It is so
+only when really held in a frame: opened on its own, its address asking `?embedded=1` or not, the page is the login's
+own, its rail and its colours (see-through there it showed the browser's white canvas behind the dark themes' light
+text).
+
 ## 0.15.2 (2026-11-10)
 
 A remote login in Docker, prepared (the user: "we are going to use docker to setup such a remote / testing webserver";

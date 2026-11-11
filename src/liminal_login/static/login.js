@@ -38,7 +38,10 @@
     el.focus();
     return true;
   }
-  const embedded = new URLSearchParams(location.search).get('embedded') === '1';
+  // held in another app's page: asked so (?embedded=1) and really in a frame (0.15.3: opened on its own, the address
+  // asking it or not, the page is the login's own, its rail and its colours; see-through on its own it showed the
+  // browser's white canvas behind the dark themes' light text)
+  const embedded = new URLSearchParams(location.search).get('embedded') === '1' && window.parent !== window;
   if (embedded) document.body.classList.add('embedded');
   $('railUser').innerHTML = icon('lambda', 30);  // Liminal's sign, the login's master icon (0.13.1; the user icon until then)
   let signup = null;  // a sign-up under way: { email, token }

@@ -50,6 +50,30 @@ def test_the_page_its_icon_and_the_librarys_files(served):
     assert any("login: its page at" in m for m in lines)
 
 
+def test_inside_another_apps_page_the_login_draws_no_frame_of_its_own(served):
+    """0.15.3 (the user, 2026-11-10, of a lighter box drawn all round the platform's sign-in: "Yes, fix both"): held in
+    another app's page (?embedded=1: the sign-in an app opens on, your account, the charts' bound view) the login's page
+    keeps none of its page's padding and is see-through, its body and its panel alike, so neither the frame's colour nor
+    its panel's (lighter than the page in Light and Paper) shows round it: behind it the colour of the place holding it,
+    in every theme. Every rule of the kind is embedded-only; on its own the page is the library's as before."""
+    import re
+
+    _app, port, _lines = served
+    css = re.sub(r"/\*.*?\*/", "", _call(port, "GET", "/login.css")[1].decode("utf-8"), flags=re.S)
+    assert "body.embedded, body.embedded .app-main { background: transparent; }" in css
+    assert "body.embedded .app-page { padding: 0; }" in css and "body.embedded #rail { display: none; }" in css
+    # nothing else of the frame or the page's colour changed here: each rule's own selector and declarations, @media's too
+    for sel, decls in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        sel = sel.strip()
+        if re.search(r"\b(background|padding)\s*:", decls) and (".app-page" in sel or ".app-main" in sel or sel.startswith("body")):
+            assert "body.embedded" in sel, sel
+    page = _call(port, "GET", "/login.js")[1].decode("utf-8")
+    # the page marks itself so only when it is held: asked so and really in a frame (opened on its own, the address asking
+    # it or not, it keeps its own rail and colours: see-through there it showed the browser's white canvas)
+    assert "const embedded = new URLSearchParams(location.search).get('embedded') === '1' && window.parent !== window;" in page
+    assert "if (embedded) document.body.classList.add('embedded');" in page
+
+
 def test_the_first_user_is_made_from_the_page_then_signs_in_and_out(served):
     app, port, lines = served
     st = _call(port, "GET", "/api/status")[1]

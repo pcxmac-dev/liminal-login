@@ -1,5 +1,11 @@
 /* The login app's own look, on the library's liminal.css: the user card and the pairs. */
 body.embedded #rail { display: none; }  /* inside another app's page (?embedded=1): that page's rail has the icon */
+/* 0.15.3: and that page draws the frame and the colour round it. The login's own (its page's padding on the frame's
+   colour, then its panel's colour) showed as a lighter box all round it, from the top of the window to the bottom on the
+   sign-in an app opens on (in Light and Paper the panel is lighter than the page). Embedded, the page is see-through:
+   behind it the colour of the place holding it (the sign-in page, your account's view, the charts' bound view) */
+body.embedded, body.embedded .app-main { background: transparent; }
+body.embedded .app-page { padding: 0; }
 .login-icon { color: var(--accent); display: grid; place-items: center; margin-bottom: 4px; }
 /* 0.14.0: on the way in the icon is the button (the secret user, the default: type secret, then the icon) */
 button.login-icon { margin: 0 auto 4px; padding: 4px; border: 0; border-radius: 10px; }
