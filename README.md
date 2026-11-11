@@ -20,6 +20,10 @@ liminal-login user list
 liminal-login status
 ```
 
+The way in, for now: type `secret` as the user and click the lambda (or press Enter): the secret user comes in
+without a password on a local login, made the first time. Its keys are not protected by a password: keep nothing you
+care about there. Sign in (a password) and Sign up are beside it.
+
 Signing up is three steps: your email (a six-digit code goes to it, when a mail account is set, below),
 the code, then your account name and password. The first visit offers it; later accounts come from
 "Sign up" on the sign-in page; `user add` makes one from the command line without a code, and without a
@@ -149,7 +153,8 @@ which only the connection's provider can set; a message to such a receiver goes 
 ## The API
 
 Only from this machine, only from the app's own pages or a program here (every write carries the
-apps' header). `GET /api/status`, `POST /api/users`, `POST /api/sign-in`, `POST /api/sign-out`,
+apps' header). `GET /api/status`, `POST /api/users`, `POST /api/sign-in`, `POST /api/sign-in/secret` (a local login's secret user),
+`POST /api/sign-out`,
 `POST /api/signup`, `POST /api/signup/resend`, `POST /api/signup/verify`, `POST /api/signup/complete`,
 `GET /api/me`, `PUT /api/me/password`, `GET /api/pairs`, `GET|PUT|DELETE /api/pairs/<name>`,
 `GET /api/pairs/known` (the pairs an inheriting app's plugins ask for; none on its own), `GET /api/tray`,

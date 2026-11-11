@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.0 (2026-11-10)
+
+The secret user, the default way in (the user: "for now lets have a secret user, name - secret, no password entry, you
+type secret in to user and click on icon"; "that will be the default"; "signup and sign-in should be options too"):
+- Signed out, the page shows the lambda (a button), a User field, and Sign in and Sign up beside it. `secret` and the
+  icon (or Enter) come straight in; any other name goes on to the password form with the name filled in.
+- `POST /api/sign-in/secret {name: "secret"}`: a local login only (403 on a domain's), the secret user made the first
+  time it is asked for. Its store opens with a password written in the code, so its keys are NOT protected by one; the
+  page says so while it is signed in (`/api/me` `passwordless`). A user named secret with a password of their own is
+  never let in this way (401), and nobody else comes in without a password (400).
+- Sign up: a domain's login with an email server sends its code as before; a local login makes the account on the page,
+  now without a session too (anyone at this machine; a domain's login still takes no account from the page once it has
+  users). Sign in: the account name (or email) and the password, as before, with Back to the way in.
+
 ## 0.13.1 (2026-11-10)
 
 The login app's icons are Liminal's sign, the brushed italic lambda (liminal-libs 1.44.0's `lambda`; the user: "replace

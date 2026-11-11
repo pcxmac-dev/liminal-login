@@ -48,6 +48,13 @@ PAIRS_SECONDS = 60.0  # the pairs a superclass's plugins ask for, asked of it ag
 SESSION_MINUTES_VAR = "LIMINAL_LOGIN_SESSION_MINUTES"
 SESSION_MINUTES = 480.0  # a session ends after this long without a request
 FAILURE_DELAY_S = 0.5  # after a wrong name or password: no guessing at speed
+# The secret user (0.14.0; the user, 2026-11-10: "for now lets have a secret user, name - secret, no password entry, you
+# type secret in to user and click on icon"; "that will be the default"): a local login's way in without a password,
+# made the first time it is asked for. Its store opens with the password written here, so its keys are not protected
+# by one; a user named secret who has a password of their own is never let in this way, nor is anyone on a domain's
+# login.
+SECRET_USER = "secret"
+SECRET_PASSWORD = "liminal-secret-user"
 CODE_SUBJECT = "Your {title} code"
 CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
              "Type it on the page that asked for it within {minutes:g} minutes. If you did not ask for an "
@@ -110,6 +117,7 @@ class Session:
     user: User
     vault: KeyPairStore
     last: float
+    passwordless: bool = False  # the secret user's: in without a password (its keys unprotected by one)
 
     def close(self) -> None:
         self.vault.close()
@@ -172,8 +180,8 @@ class LoginApp(App):
         """Why no sign-up by email here, or "" when there is one: a local login takes none; a domain's needs
         an email server, the one its mail record names or the one its file's [mail] names."""
         if self.scope.kind != "domain":
-            return (f"this login is local ({self.scope.label}): no sign-up by email; the first user is made here, "
-                    "the next by a signed-in user or `liminal-login user add NAME`")
+            return (f"this login is local ({self.scope.label}): no sign-up by email; accounts are made here on the page "
+                    "(Sign up) or with `liminal-login user add NAME`")
         s = self.mailer.settings
         if not s.configured:
             return "email sending is not set up: " + "; ".join(s.problems()) + " (or `liminal-login user add NAME` here)"
@@ -302,6 +310,26 @@ class LoginApp(App):
         self.log(f"login: {user.name} signed in")
         return status, {"token": s.token, "user": user.as_dict()}, self._cookie(s.token)
 
+    def _secret_sign_in(self, body: dict):
+        """The secret user in without a password (SECRET_USER): a local login only, made the first time; refused when a
+        user of that name has a password of their own."""
+        if self.scope.kind == "domain":
+            raise Refused(HTTPStatus.FORBIDDEN, "the secret user is only for a local login: sign in with your password")
+        if str(body.get("name") or "").strip().lower() != SECRET_USER:
+            raise Refused(HTTPStatus.BAD_REQUEST, "only the secret user comes in without a password: sign in with yours")
+        user = self.users.verify(SECRET_USER, SECRET_PASSWORD)
+        if user is None:
+            if self.users.exists(SECRET_USER):
+                time.sleep(self.failure_delay)
+                raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password")
+            self.users.create(SECRET_USER, SECRET_PASSWORD)
+            self.log("login: the secret user was made (no password: its keys are not protected by one)")
+            user = self.users.verify(SECRET_USER, SECRET_PASSWORD)
+        s = self._open(user)
+        s.passwordless = True
+        self.log(f"login: {user.name} signed in (the secret user, no password)")
+        return 200, {"token": s.token, "user": user.as_dict(), "passwordless": True}, self._cookie(s.token)
+
     # -- the routes ------------------------------------------------------------------------------
     def api(self, handler, method: str, path: str, query: dict, body: dict | None):
         body = body or {}
@@ -316,7 +344,9 @@ class LoginApp(App):
             self._require(handler)
             return 200, {"users": self.users.names()}
         if path == "/api/users" and method == "POST":
-            if self.users.count() and self.session(handler) is None:
+            # a domain's login: a user signed in adds one, everyone else signs up with a code; a local login: anyone at
+            # this machine signs up on the page (0.14.0, the user: "signup and sign-in should be options too")
+            if self.users.count() and self.session(handler) is None and self.scope.kind == "domain":
                 raise Refused(HTTPStatus.UNAUTHORIZED, "sign in to add a user")
             if not self.users.count() and self.signup_open():
                 raise Refused(HTTPStatus.CONFLICT, "the first account is made with a code sent to your email (sign up)")
@@ -326,6 +356,8 @@ class LoginApp(App):
                 raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
             self.log(f"login: user {user.name} created")
             return 201, user.as_dict()
+        if path == "/api/sign-in/secret" and method == "POST":
+            return self._secret_sign_in(body)
         if path == "/api/signup" and method == "POST":
             return self._signup(body)
         if path == "/api/signup/resend" and method == "POST":
@@ -498,4 +530,4 @@ class LoginApp(App):
                 "store": {"file": str(s.vault.path), "pairs": s.vault.count(), "vaultFingerprint": s.vault.fingerprint,
                           "unlockFingerprint": u.unlock_fingerprint, "kdf": u.kdf, "salt": u.salt.hex(),
                           "usersFile": str(self.users.path)},
-                "session": {"minutes": self.session_seconds / 60}}
+                "session": {"minutes": self.session_seconds / 60}, "passwordless": s.passwordless}

@@ -72,7 +72,7 @@
     mail = st.signup || {};
     titled('sign in');
     if (signup) return signup.token ? detailsForm() : codeForm();
-    if (!st.signedIn) { tell(false); return signInForm(st); }
+    if (!st.signedIn) { tell(false); return entryForm(st); }
     const me = await api('GET', 'api/me');
     const pairs = (await api('GET', 'api/pairs')).pairs;
     const known = (await api('GET', 'api/pairs/known')).known;  // the pairs the plugins here ask for
@@ -82,56 +82,86 @@
     tell(true, me.name);
   }
 
-  // -- signed out: sign in, or sign up -----------------------------------------------------------
-  function signInForm(st) {
-    const first = st.users === 0;
-    const mail = st.signup && st.signup.email;
-    if (first && !mail) return firstUserForm(st);
+  // -- signed out: the way in, or sign in with a password, or sign up ---------------------------------------------
+  // The way in (0.14.0; the user, 2026-11-10: "for now lets have a secret user, name - secret, no password entry, you
+  // type secret in to user and click on icon"; "that will be the default"; "signup and sign-in should be options too"):
+  // the user's name, then the icon (or Enter): secret comes straight in (a local login), anyone else goes on to their
+  // password; Sign in and Sign up beside it
+  function entryForm(st, said = '') {
+    titled('sign in');
+    main.innerHTML = `<div class="card center">
+      <button type="button" id="enter" class="login-icon" aria-label="${esc(forTitle)}">${icon('lambda', 56)}</button>
+      <h1>${esc(forTitle)}</h1>
+      ${st.scope ? `<p class="muted scope">${esc(st.scope.label)}</p>` : ''}
+      <form id="entry">
+        <div class="field"><label for="user">User</label><input id="user" type="text" ${kb('username', 'go')} maxlength="254" required></div>
+        <div class="row end"><button type="button" id="toSignIn">Sign in</button><button type="button" id="toSignUp">Sign up</button></div>
+        <p id="err" class="error">${esc(said)}</p>
+      </form></div>`;
+    const enter = async () => {
+      const name = $('user').value.trim();
+      $('err').textContent = '';
+      if (!name) { focusFirst($('user')); return; }
+      if (name.toLowerCase() !== 'secret') { signInForm(st, name); return; }  // anyone else: their password
+      try { await api('POST', 'api/sign-in/secret', { name }); render(); }
+      catch (err) { $('err').textContent = err.message; }
+    };
+    $('enter').addEventListener('click', enter);
+    $('entry').addEventListener('submit', (e) => { e.preventDefault(); enter(); });
+    $('toSignIn').addEventListener('click', () => signInForm(st, $('user').value.trim()));
+    $('toSignUp').addEventListener('click', () => signUp(st));
+    focusFirst($('user'));
+  }
+
+  function signInForm(st, name = '') {
+    titled('sign in');
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('lambda', 56)}</div>
-      <h1>${first ? `Welcome to ${esc(forTitle)}` : `Sign in to ${esc(forTitle)}`}</h1>
+      <h1>Sign in to ${esc(forTitle)}</h1>
       ${st.scope ? `<p class="muted scope">${esc(st.scope.label)}</p>` : ''}
-      <p class="muted">${first ? 'No account yet. Sign up: a code goes to your email, then you choose your account name and password.'
-        : 'Your account name (or email) and password open your keys and accounts.'}</p>
-      ${first ? '' : `<form id="signin">
+      <p class="muted">Your account name (or email) and password open your keys and accounts.</p>
+      <form id="signin">
         <div class="field"><label for="name">Account name or email</label>
           <input id="name" type="text" ${kb('username', { inputmode: 'email' })} maxlength="254" required></div>
         <div class="field"><label for="password">Password</label>
           <input id="password" type="password" ${kb('password')} required minlength="8"></div>
-        <div class="row end"><button type="submit" class="accent">Sign in</button></div>
-        <p id="err" class="error"></p></form>`}
-      <p class="muted">${mail ? `<button type="button" id="toSignup" class="${first ? 'accent' : ''}">Sign up</button>`
-        : (st.scope && st.scope.kind === 'local'
-          ? 'A local login: the first user is made here, more by a signed-in user or <code>liminal-login user add NAME</code>.'
-          : `Signing up needs an email server for ${esc(st.scope ? st.scope.domain : 'the domain')}: none in its mail record and none named in liminal-login.cfg under [mail] (or <code>liminal-login user add NAME</code>).`)}</p>
+        <div class="row end"><button type="button" id="back">Back</button><button type="submit" class="accent">Sign in</button></div>
+        <p id="err" class="error"></p></form>
     </div>`;
-    if (!first) {
-      $('signin').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        $('err').textContent = '';
-        try { await api('POST', 'api/sign-in', { name: $('name').value, password: $('password').value }); $('password').value = ''; render(); }
-        catch (err) { $('err').textContent = err.message; }
-      });
-      focusFirst($('name'));
-    }
-    if (mail) $('toSignup').addEventListener('click', () => emailForm(first));
+    $('name').value = name;
+    $('signin').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      $('err').textContent = '';
+      try { await api('POST', 'api/sign-in', { name: $('name').value, password: $('password').value }); $('password').value = ''; render(); }
+      catch (err) { $('err').textContent = err.message; }
+    });
+    $('back').addEventListener('click', () => entryForm(st));
+    focusFirst(name ? $('password') : $('name'));
   }
 
-  function firstUserForm(st) {
-    // no sign-up by email here (a local login sends none; a domain's has no email server yet): the first user is made
-    // here, without a code
+  // Sign up: a domain's login with an email server sends a code first; a local login (or a domain's first user while it
+  // has no email server) makes the account here
+  function signUp(st) {
+    if (st.signup && st.signup.email) return emailForm(false);
+    if (st.scope && st.scope.kind === 'domain' && st.users > 0) return entryForm(st, (st.signup && st.signup.why) || 'signing up needs an email server');
+    return createForm(st);
+  }
+
+  function createForm(st) {
+    // no code: a local login sends no email, a domain's has no email server yet
     const local = !st.scope || st.scope.kind !== 'domain';
-    titled('the first user');
+    const first = st.users === 0;
+    titled(first ? 'the first user' : 'sign up');
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('lambda', 56)}</div>
-      <h1>Create the first user</h1>
-      <p class="muted">${esc(forTitle)} has no users yet: the first one is yours. The password unlocks your keys and accounts; it is never stored. (${local ? 'This login is local: it sends no email, so no code is needed.' : 'Email sending is not set up here, so no code is needed for the first user.'})</p>
+      <h1>${first ? 'Create the first user' : 'Sign up'}</h1>
+      <p class="muted">${first ? `${esc(forTitle)} has no users yet: the first one is yours. ` : ''}The password unlocks your keys and accounts; it is never stored. (${local ? 'This login is local: it sends no email, so no code is needed.' : 'Email sending is not set up here, so no code is needed for the first user.'})</p>
       <form id="first">
         <div class="field"><label for="name">Account name</label><input id="name" type="text" ${kb('username')} maxlength="40" required></div>
         <div class="field"><label for="email">Email (optional)</label><input id="email" type="email" ${kb('email')} maxlength="254"></div>
         <div class="field"><label for="password">Password</label><input id="password" type="password" ${kb('password', NEW_NEXT)} required minlength="8"></div>
         <div class="field"><label for="again">Password, again</label><input id="again" type="password" ${kb('password', NEW_DONE)} required minlength="8"></div>
-        <div class="row end"><button type="submit" class="accent">Create and sign in</button></div>
+        <div class="row end"><button type="button" id="back">Back</button><button type="submit" class="accent">Create and sign in</button></div>
         <p id="err" class="error"></p>
       </form></div>`;
     $('first').addEventListener('submit', async (e) => {
@@ -145,6 +175,7 @@
         render();
       } catch (err) { $('err').textContent = err.message; }
     });
+    $('back').addEventListener('click', () => entryForm(st));
     focusFirst($('name'));
   }
 
@@ -239,6 +270,7 @@
     return `<div class="user-head"><div class="avatar">${esc(me.name[0].toUpperCase())}</div>
         <div><h1>${esc(me.name)}</h1><div class="muted">${me.email ? `${esc(me.email)}${me.verified ? ' (verified)' : ' (not verified)'} · ` : ''}${esc(forTitle)}; signed in; this session ends after ${esc(me.session.minutes)} minutes without a request</div></div>
         <div class="row" style="margin-left:auto"><button type="button" id="signout" title="Sign out: your store closes">${icon('logout', 18)} Sign out</button></div></div>
+      ${me.passwordless ? '<p class="muted note">The secret user: in without a password, so its keys are not protected by one.</p>' : ''}
       <h2>Your store</h2>
       <dl class="facts">
         <dt>Created</dt><dd>${esc(when(me.createdAt))}</dd>

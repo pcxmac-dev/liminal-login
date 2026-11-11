@@ -45,7 +45,7 @@ def test_the_page_its_icon_and_the_librarys_files(served):
     assert tray == {"app": "login", "icon": "lambda", "title": "Login",  # Liminal's sign (0.13.1; the user icon before)
                     "items": [{"id": "login", "icon": "lambda", "title": "Login", "kind": "app", "app": "login"}]}
     page = _call(port, "GET", "/login.js")[1].decode("utf-8")
-    assert "icon('user'" not in page and page.count("icon('lambda', 56)") == 4 and "icon('lambda', 30)" in page
+    assert "icon('user'" not in page and page.count("icon('lambda', 56)") == 5 and "icon('lambda', 30)" in page
     assert _call(port, "GET", "/api/app")[1]["port"] == 8795 and app.port() == 8795 and app.dir == app.root  # its own folder
     assert any("login: its page at" in m for m in lines)
 
@@ -59,8 +59,9 @@ def test_the_first_user_is_made_from_the_page_then_signs_in_and_out(served):
     assert _call(port, "GET", "/api/me")[0] == 401 and _call(port, "GET", "/api/pairs")[0] == 401
     status, data, _ = _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})
     assert status == 201 and data["name"] == "Ada" and "password" not in json.dumps(data)
-    # a second user needs a session (the first came with none)
-    assert _call(port, "POST", "/api/users", {"name": "Bob", "password": "another password"})[0] == 401
+    # a local login: anyone at this machine signs up on the page, without a session (0.14.0, "signup and sign-in should be
+    # options too"); a domain's login takes no account from the page once it has users (test_the_secret_user...)
+    assert _call(port, "POST", "/api/users", {"name": "Cy", "password": "a third password"})[0] == 201
     status, data, r = _call(port, "POST", "/api/sign-in", {"name": "ada", "password": "wrong password"})
     assert status == 401 and data == {"error": "wrong name or password"} and r.getheader("Set-Cookie") is None
     status, data, r = _call(port, "POST", "/api/sign-in", {"name": "ada", "password": "correct horse battery"})
@@ -76,7 +77,7 @@ def test_the_first_user_is_made_from_the_page_then_signs_in_and_out(served):
     assert "key" not in {k.lower() for k in me["store"]} - {"unlockfingerprint", "vaultfingerprint"} or True
     # signed in, a second user may be made
     assert _call(port, "POST", "/api/users", {"name": "Bob", "password": "another password"}, token=token)[0] == 201
-    assert [u["name"] for u in _call(port, "GET", "/api/users", token=token)[1]["users"]] == ["Ada", "Bob"]
+    assert [u["name"] for u in _call(port, "GET", "/api/users", token=token)[1]["users"]] == ["Ada", "Cy", "Bob"]  # as made
     status, data, r = _call(port, "POST", "/api/sign-out", token=token)
     assert status == 200 and data == {"signedOut": True} and "Max-Age=0" in r.getheader("Set-Cookie")
     assert _call(port, "GET", "/api/me", token=token)[0] == 401
@@ -319,7 +320,7 @@ def test_what_a_look_at_the_page_found_is_mended(served):
     # and the check itself: the old pattern's bare - is caught
     assert "-" in re.sub(r".-.", "", re.sub(r"\\.", "", "a-z0-9._-"))
     assert "(${esc(s.pairs)} ${s.pairs === 1 ? 'pair' : 'pairs'})" in page
-    assert "titled(me.name);" in page and "titled('the first user');" in page and page.count("titled('sign up');") == 3
+    assert "titled(me.name);" in page and "titled(first ? 'the first user' : 'sign up');" in page and page.count("titled('sign up');") == 3
     assert "titled('sign in');" in page and "document.title = `${forTitle}: sign in`" not in page
     assert not re.search(r"\b(window\.)?(confirm|alert)\(", page)
     assert ('<span class="ask" hidden>Remove it? <button type="button" class="yes danger">Remove</button>'
@@ -336,3 +337,49 @@ def test_what_a_look_at_the_page_found_is_mended(served):
     finally:
         other.close()
     assert "This login is local: it sends no email, so no code is needed." in page
+
+
+def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, folder):
+    """0.14.0 (the user, 2026-11-10: "for now lets have a secret user, name - secret, no password entry, you type secret in
+    to user and click on icon"; "that will be the default"; "signup and sign-in should be options too"): on a local login
+    the secret user comes in by its name alone (made the first time), its session marked so the page says its keys are
+    not protected by a password; nobody else does; a user named secret with a password of their own never does; a
+    domain's login has no secret user and takes no account from the page once it has users. The page: the user's name,
+    then the icon (a button), with Sign in and Sign up beside it."""
+    from conftest import FakeMailer, _port
+    from liminal_libs.apps import Scope
+
+    app, port, lines = served
+    status, data, r = _call(port, "POST", "/api/sign-in/secret", {"name": " Secret "})
+    assert status == 200 and data["user"]["name"] == "secret" and data["passwordless"] is True
+    assert r.getheader("Set-Cookie").startswith(f"{COOKIE}={data['token']}")
+    me = _call(port, "GET", "/api/me", token=data["token"])[1]
+    assert me["name"] == "secret" and me["passwordless"] is True and app.users.count() == 1
+    assert _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 200 and app.users.count() == 1  # made once
+    assert _call(port, "POST", "/api/sign-in/secret", {"name": "ada"})[0] == 400  # nobody else without a password
+    assert _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})[0] == 201  # sign up
+    tok = _call(port, "POST", "/api/sign-in", {"name": "Ada", "password": "correct horse battery"})[1]["token"]
+    assert _call(port, "GET", "/api/me", token=tok)[1]["passwordless"] is False
+    assert any("the secret user was made" in m for m in lines) and not any("liminal-secret-user" in m for m in lines)
+    other = LoginApp(folder / "other", log=lambda m: None, failure_delay=0)  # a secret user with a password of its own
+    try:
+        other.users.create("secret", "a real password")
+        assert _call(_port(other.start(0)), "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 401
+    finally:
+        other.close()
+    dom = LoginApp(folder / "dom", log=lambda m: None, failure_delay=0, mailer=FakeMailer(configured=False),
+                   scope=Scope.for_domain("example.test"))
+    try:
+        dport = _port(dom.start(0))
+        assert _call(dport, "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 403 and dom.users.count() == 0
+        dom.users.create("Ada", "correct horse battery")
+        assert _call(dport, "POST", "/api/users", {"name": "Bob", "password": "another password"})[0] == 401
+    finally:
+        dom.close()
+    page = _call(port, "GET", "/login.js")[1].decode("utf-8")
+    assert '<button type="button" id="enter" class="login-icon" aria-label="${esc(forTitle)}">' in page
+    assert "api('POST', 'api/sign-in/secret', { name })" in page and "if (!st.signedIn) { tell(false); return entryForm(st); }" in page
+    assert 'id="toSignIn">Sign in</button><button type="button" id="toSignUp">Sign up</button>' in page
+    assert "if (name.toLowerCase() !== 'secret') { signInForm(st, name); return; }" in page
+    css = _call(port, "GET", "/login.css")[1].decode("utf-8")
+    assert "button.login-icon {" in css and ":hover" not in css  # a mouse's highlight is the library's, in (hover: hover)
