@@ -116,7 +116,7 @@ class Session:
 
 
 class LoginApp(App):
-    NAME, ICON = "login", "user"
+    NAME, ICON = "login", "lambda"  # Liminal's sign (the user, 2026-11-10: "replace all user icons (login app) with the lambda sign")
     PORT = 8795
     PORT_VAR = "LIMINAL_LOGIN_PORT"
     STATIC = Path(__file__).parent / "static"

@@ -42,8 +42,10 @@ def test_the_page_its_icon_and_the_librarys_files(served):
     assert b"window.LiminalIcons" in _call(port, "GET", "/icons.js")[1] and b"#rail" in _call(port, "GET", "/liminal.css")[1]
     assert b"signInForm" in _call(port, "GET", "/login.js")[1] and _call(port, "GET", "/login.css")[0] == 200
     status, tray, _ = _call(port, "GET", "/api/tray")
-    assert tray == {"app": "login", "icon": "user", "title": "Login",
-                    "items": [{"id": "login", "icon": "user", "title": "Login", "kind": "app", "app": "login"}]}
+    assert tray == {"app": "login", "icon": "lambda", "title": "Login",  # Liminal's sign (0.13.1; the user icon before)
+                    "items": [{"id": "login", "icon": "lambda", "title": "Login", "kind": "app", "app": "login"}]}
+    page = _call(port, "GET", "/login.js")[1].decode("utf-8")
+    assert "icon('user'" not in page and page.count("icon('lambda', 56)") == 4 and "icon('lambda', 30)" in page
     assert _call(port, "GET", "/api/app")[1]["port"] == 8795 and app.port() == 8795 and app.dir == app.root  # its own folder
     assert any("login: its page at" in m for m in lines)
 

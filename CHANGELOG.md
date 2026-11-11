@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1 (2026-11-10)
+
+The login app's icons are Liminal's sign, the brushed italic lambda (liminal-libs 1.44.0's `lambda`; the user: "replace
+all user icons (login app) with the lambda sign"): its master icon (the tray an inheriting app draws, `ICON`), the
+page's rail button, and the big icon on the sign-in, first-user and sign-up cards.
+
 ## 0.13.0 (2026-11-10)
 
 On its own the login knows no other app (the user: "the log-in app should not point to platform, integrator or charts,

@@ -40,7 +40,7 @@
   }
   const embedded = new URLSearchParams(location.search).get('embedded') === '1';
   if (embedded) document.body.classList.add('embedded');
-  $('railUser').innerHTML = icon('user', 30);
+  $('railUser').innerHTML = icon('lambda', 30);  // Liminal's sign, the login's master icon (0.13.1; the user icon until then)
   let signup = null;  // a sign-up under way: { email, token }
   let forTitle = 'Liminal';
   let mail = {};  // how codes go out (the status's signup: the host, the sender, the last send's receipt)
@@ -88,7 +88,7 @@
     const mail = st.signup && st.signup.email;
     if (first && !mail) return firstUserForm(st);
     main.innerHTML = `<div class="card center">
-      <div class="login-icon">${icon('user', 56)}</div>
+      <div class="login-icon">${icon('lambda', 56)}</div>
       <h1>${first ? `Welcome to ${esc(forTitle)}` : `Sign in to ${esc(forTitle)}`}</h1>
       ${st.scope ? `<p class="muted scope">${esc(st.scope.label)}</p>` : ''}
       <p class="muted">${first ? 'No account yet. Sign up: a code goes to your email, then you choose your account name and password.'
@@ -123,7 +123,7 @@
     const local = !st.scope || st.scope.kind !== 'domain';
     titled('the first user');
     main.innerHTML = `<div class="card center">
-      <div class="login-icon">${icon('user', 56)}</div>
+      <div class="login-icon">${icon('lambda', 56)}</div>
       <h1>Create the first user</h1>
       <p class="muted">${esc(forTitle)} has no users yet: the first one is yours. The password unlocks your keys and accounts; it is never stored. (${local ? 'This login is local: it sends no email, so no code is needed.' : 'Email sending is not set up here, so no code is needed for the first user.'})</p>
       <form id="first">
@@ -152,7 +152,7 @@
   function emailForm(first) {
     titled('sign up');
     main.innerHTML = `<div class="card center">
-      <div class="login-icon">${icon('user', 56)}</div>
+      <div class="login-icon">${icon('lambda', 56)}</div>
       <h1>Sign up</h1>
       <p class="muted">Your email first: a six-digit code goes to it ${mail.direct ? 'straight through its own mail server' : `through <b>${esc(mail.host || 'the mail account set here')}</b>`}${mail.sender ? ` as ${esc(mail.sender)}` : ''}. Then you choose your account name and password.</p>
       ${mail.lastSent ? `<p class="muted">The last code went out at ${esc(when(mail.lastSent.at))}: the server answered <span class="mono">${esc(mail.lastSent.code)} ${esc(mail.lastSent.reply)}</span>.</p>` : ''}
@@ -208,7 +208,7 @@
   function detailsForm() {
     titled('sign up');
     main.innerHTML = `<div class="card center">
-      <div class="login-icon">${icon('user', 56)}</div>
+      <div class="login-icon">${icon('lambda', 56)}</div>
       <h1>Your account</h1>
       <p class="muted"><b>${esc(signup.email)}</b> is verified. Choose your account name and password; the password unlocks your keys and accounts and is never stored.</p>
       <form id="details">
