@@ -55,7 +55,11 @@
       body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin' });
     let data = null;
     try { data = await r.json(); } catch (e) { data = null; }
-    if (!r.ok) throw new Error((data && data.error) || `the login app answered ${r.status}`);
+    if (!r.ok) {
+      const err = new Error((data && data.error) || `the login app answered ${r.status}`);
+      err.status = r.status;  // what the caller may go on by (the way in: 400, not the secret user)
+      throw err;
+    }
     return data;
   }
   const when = (iso) => (iso ? new Date(iso).toLocaleString() : 'never');
@@ -98,13 +102,14 @@
         <div class="row end"><button type="button" id="toSignIn">Sign in</button><button type="button" id="toSignUp">Sign up</button></div>
         <p id="err" class="error">${esc(said)}</p>
       </form></div>`;
+    // the secret user's name is the login's own, a value in its database (0.14.1): asked of it, never written here;
+    // anyone else (400), or any name on a domain's login (403), goes on to their password
     const enter = async () => {
       const name = $('user').value.trim();
       $('err').textContent = '';
       if (!name) { focusFirst($('user')); return; }
-      if (name.toLowerCase() !== 'secret') { signInForm(st, name); return; }  // anyone else: their password
       try { await api('POST', 'api/sign-in/secret', { name }); render(); }
-      catch (err) { $('err').textContent = err.message; }
+      catch (err) { if (err.status === 400 || err.status === 403) signInForm(st, name); else $('err').textContent = err.message; }
     };
     $('enter').addEventListener('click', enter);
     $('entry').addEventListener('submit', (e) => { e.preventDefault(); enter(); });

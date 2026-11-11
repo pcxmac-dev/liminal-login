@@ -50,11 +50,11 @@ SESSION_MINUTES = 480.0  # a session ends after this long without a request
 FAILURE_DELAY_S = 0.5  # after a wrong name or password: no guessing at speed
 # The secret user (0.14.0; the user, 2026-11-10: "for now lets have a secret user, name - secret, no password entry, you
 # type secret in to user and click on icon"; "that will be the default"): a local login's way in without a password,
-# made the first time it is asked for. Its store opens with the password written here, so its keys are not protected
-# by one; a user named secret who has a password of their own is never let in this way, nor is anyone on a domain's
-# login.
-SECRET_USER = "secret"
-SECRET_PASSWORD = "liminal-secret-user"
+# made the first time it is asked for. Its name and password are values in the login's database (0.14.1, the user: "the
+# user and the password should be values in the database for login"; users.py, `settings`), its password random, never
+# in the code; a user of that name who has a password of their own is never let in this way, nor is anyone on a
+# domain's login. 0.14.0 wrote one password here: a secret user made with it moves onto a random one in the database.
+LEGACY_SECRET_PASSWORDS = ("liminal-secret-user",)
 CODE_SUBJECT = "Your {title} code"
 CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
              "Type it on the page that asked for it within {minutes:g} minutes. If you did not ask for an "
@@ -157,6 +157,7 @@ class LoginApp(App):
         self.failure_delay = failure_delay
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
+        self._secret_lock = threading.Lock()  # the secret user made once, however many ask at the same time
         self._pairs_asked: tuple[float, list[dict]] | None = None  # the superclass's word on its plugins' pairs, and when
 
     @property
@@ -311,20 +312,28 @@ class LoginApp(App):
         return status, {"token": s.token, "user": user.as_dict()}, self._cookie(s.token)
 
     def _secret_sign_in(self, body: dict):
-        """The secret user in without a password (SECRET_USER): a local login only, made the first time; refused when a
-        user of that name has a password of their own."""
+        """The secret user in without a password: a local login only. The name typed is checked against the one the
+        database keeps (`secret` before it is made); the user is made the first time, its password a random one kept in
+        the database; refused when a user of that name has a password of their own. Any other name: 400 (the page goes
+        on to its password)."""
         if self.scope.kind == "domain":
             raise Refused(HTTPStatus.FORBIDDEN, "the secret user is only for a local login: sign in with your password")
-        if str(body.get("name") or "").strip().lower() != SECRET_USER:
+        typed = str(body.get("name") or "").strip()
+        if not typed or typed.lower() != self.users.secret_name().lower():
             raise Refused(HTTPStatus.BAD_REQUEST, "only the secret user comes in without a password: sign in with yours")
-        user = self.users.verify(SECRET_USER, SECRET_PASSWORD)
-        if user is None:
-            if self.users.exists(SECRET_USER):
+        with self._secret_lock:
+            made = self.users.secret_kept() is None
+            try:
+                name, password = self.users.make_secret(LEGACY_SECRET_PASSWORDS)
+            except ValueError:
                 time.sleep(self.failure_delay)
-                raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password")
-            self.users.create(SECRET_USER, SECRET_PASSWORD)
-            self.log("login: the secret user was made (no password: its keys are not protected by one)")
-            user = self.users.verify(SECRET_USER, SECRET_PASSWORD)
+                raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password") from None
+        if made:
+            self.log("login: the secret user was made (no password: its own is kept in the login's database)")
+        user = self.users.verify(name, password)
+        if user is None:  # its row changed outside the login: its kept password no longer opens it
+            time.sleep(self.failure_delay)
+            raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password")
         s = self._open(user)
         s.passwordless = True
         self.log(f"login: {user.name} signed in (the secret user, no password)")

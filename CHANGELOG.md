@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.1 (2026-11-10)
+
+The secret user's name and password are values in the login's database (the user: "the user and the password should be
+values in the database for login"), never in the code: a `settings` table in users.db keeps `secret_user` (`secret`
+when it is made) and `secret_password` (random, made with it). The way in checks the name typed against the one kept,
+so the page no longer knows it (it asks; anyone else goes on to their password), and changing the two values signs
+another user in that way. A secret user made by 0.14.0 with the password it wrote in its code moves onto a random one
+kept in the database, its pairs kept. The password is kept in the clear there: anyone with that file can open the
+secret user's store.
+
 ## 0.14.0 (2026-11-10)
 
 The secret user, the default way in (the user: "for now lets have a secret user, name - secret, no password entry, you

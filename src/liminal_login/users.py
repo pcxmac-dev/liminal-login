@@ -55,7 +55,14 @@ CREATE TABLE IF NOT EXISTS signups (
     verified_at TEXT,               -- when the code came back right
     token_hash BLOB                 -- the proof given then, for the step that makes the account
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,           -- the login's own values: the secret user's name and password (0.14.1)
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
+SECRET_NAME = "secret"  # the secret user's name the first time; after that, the value kept in settings
+SECRET_KEYS = ("secret_user", "secret_password")
 ADDED_COLUMNS = (("email", "TEXT COLLATE NOCASE"), ("verified_at", "TEXT"))  # 0.2.0, on a 0.1.0 file
 
 
@@ -260,6 +267,52 @@ class UserStore:
             self._con.commit()
         return User(new_name, user.created_at, user.seen_at, user.kdf, user.salt, user.unlock_key, user.vault_key,
                     user.email, user.verified_at)
+
+    # -- the login's own values (0.14.1; the user: "the user and the password should be values in the database for
+    # login"): the secret user's name and password live here, never in the code ---------------------------------------
+    def setting(self, key: str) -> str | None:
+        with self._lock:
+            row = self._con.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._lock:
+            self._con.execute("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+                              "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                              (key, str(value), now_iso()))
+            self._con.commit()
+
+    def secret_kept(self) -> tuple[str, str] | None:
+        """The secret user's name and password as this file keeps them, None before it is made."""
+        name, password = (self.setting(k) for k in SECRET_KEYS)
+        return (name, password) if name and password else None
+
+    def secret_name(self) -> str:
+        """The name that signs the secret user in: the one kept here, else `secret` (the first time)."""
+        kept = self.secret_kept()
+        return kept[0] if kept else SECRET_NAME
+
+    def make_secret(self, legacy: tuple[str, ...] = ()) -> tuple[str, str]:
+        """The secret user made, its name and a random password kept here (the password in the clear: anyone who has
+        this file can open that user's store; keep nothing of value there). A user of that name made with one of the
+        `legacy` passwords (0.14.0 wrote one in its code) moves onto the new one, its pairs kept; one with a password of
+        their own: ValueError, nothing kept."""
+        import secrets as _secrets
+
+        kept = self.secret_kept()
+        if kept:
+            return kept
+        name, password = SECRET_NAME, _secrets.token_urlsafe(24)
+        if self.exists(name):
+            old = next((p for p in legacy if self.verify(name, p) is not None), None)
+            if old is None:
+                raise ValueError(f"there is a user named {name!r} with a password of their own")
+            self.change_password(name, old, password)
+        else:
+            self.create(name, password)
+        self.set_setting(SECRET_KEYS[0], name)
+        self.set_setting(SECRET_KEYS[1], password)
+        return name, password
 
     # -- the sign-ups: an email, its code, then the name and the password --------------------------
     def start_signup(self, email, minutes: float = CODE_MINUTES) -> str:

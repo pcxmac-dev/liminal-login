@@ -361,6 +361,28 @@ def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, fo
     tok = _call(port, "POST", "/api/sign-in", {"name": "Ada", "password": "correct horse battery"})[1]["token"]
     assert _call(port, "GET", "/api/me", token=tok)[1]["passwordless"] is False
     assert any("the secret user was made" in m for m in lines) and not any("liminal-secret-user" in m for m in lines)
+    # 0.14.1 (the user: "the user and the password should be values in the database for login"): both kept in the
+    # login's database, the password random (never the one 0.14.0 wrote in its code), and never in the log
+    name, password = app.users.secret_kept()
+    assert name == "secret" and len(password) >= 24 and app.users.setting("secret_user") == "secret"
+    assert app.users.verify("secret", "liminal-secret-user") is None and not any(password in m for m in lines)
+    # the values are the database's: another name and password kept there sign that user in instead
+    app.users.create("Boss", "the boss's password")
+    app.users.set_setting("secret_user", "Boss")
+    app.users.set_setting("secret_password", "the boss's password")
+    status, data, _ = _call(port, "POST", "/api/sign-in/secret", {"name": "boss"})
+    assert status == 200 and data["user"]["name"] == "Boss" and _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 400
+    # a secret user made by 0.14.0, with the password it wrote in its code, moves onto a random one kept in the database
+    old = LoginApp(folder / "old", log=lambda m: None, failure_delay=0)
+    try:
+        old.users.create("secret", "liminal-secret-user")
+        old.users.create("Ada", "correct horse battery")
+        assert _call(_port(old.start(0)), "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 200
+        kept = old.users.secret_kept()
+        assert kept[0] == "secret" and kept[1] != "liminal-secret-user" and old.users.verify("secret", "liminal-secret-user") is None
+        assert old.users.verify("secret", kept[1]) is not None and old.users.count() == 2
+    finally:
+        old.close()
     other = LoginApp(folder / "other", log=lambda m: None, failure_delay=0)  # a secret user with a password of its own
     try:
         other.users.create("secret", "a real password")
@@ -380,6 +402,7 @@ def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, fo
     assert '<button type="button" id="enter" class="login-icon" aria-label="${esc(forTitle)}">' in page
     assert "api('POST', 'api/sign-in/secret', { name })" in page and "if (!st.signedIn) { tell(false); return entryForm(st); }" in page
     assert 'id="toSignIn">Sign in</button><button type="button" id="toSignUp">Sign up</button>' in page
-    assert "if (name.toLowerCase() !== 'secret') { signInForm(st, name); return; }" in page
+    # the secret user's name is the database's: the page asks, and anyone else goes on to their password
+    assert "!== 'secret'" not in page and "catch (err) { if (err.status === 400 || err.status === 403) signInForm(st, name);" in page
     css = _call(port, "GET", "/login.css")[1].decode("utf-8")
     assert "button.login-icon {" in css and ":hover" not in css  # a mouse's highlight is the library's, in (hover: hover)
