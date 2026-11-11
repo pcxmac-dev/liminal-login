@@ -536,11 +536,18 @@ class LoginApp(App):
             return 200, self._me(self._require(handler))
         if path == "/api/me/password" and method == "PUT":
             s = self._require(handler)
+            # the secret user (0.15.1): its current password is the key the login keeps, never typed; the new one becomes
+            # the key kept, so the way in by its name goes on working
+            kept = self.users.secret_kept() if s.passwordless else None
+            if s.passwordless and (kept is None or kept[0].lower() != s.user.name.lower()):
+                raise Refused(HTTPStatus.CONFLICT, "the login no longer keeps this user's password: sign in again")
             try:
-                s.user = self.users.change_password(s.user.name, body.get("old"), body.get("new"))
+                s.user = self.users.change_password(s.user.name, kept[1] if kept else body.get("old"), body.get("new"))
             except ValueError as e:
                 raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
-            self.log(f"login: {s.user.name} changed their password")
+            if kept:
+                self.users.set_setting("secret_password", str(body.get("new")))
+            self.log(f"login: {s.user.name} changed their password" + (" (the key the login keeps)" if kept else ""))
             return 200, {"changed": True, "unlockFingerprint": s.user.unlock_fingerprint}
         if path == "/api/pairs" and method == "GET":
             return 200, {"pairs": self._require(handler).vault.names()}

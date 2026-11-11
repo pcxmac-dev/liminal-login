@@ -366,6 +366,19 @@ def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, fo
     name, password = app.users.secret_kept()
     assert name == "secret" and len(password) >= 24 and app.users.setting("secret_user") == "secret"
     assert app.users.verify("secret", "liminal-secret-user") is None and not any(password in m for m in lines)
+    # 0.15.1 (the user: "for secret user the current password should be a key that is greyed out, and exists but cannot
+    # be modified"): the secret user changes its password without typing the current one (the key the login keeps), and
+    # the new one becomes the key kept, so the way in goes on working; anyone else still types theirs
+    secret_session = _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[1]["token"]
+    status, data, _ = _call(port, "PUT", "/api/me/password", {"new": "a brand new secret"}, token=secret_session)
+    assert status == 200 and data["changed"] is True and app.users.secret_kept() == ("secret", "a brand new secret")
+    assert app.users.verify("secret", "a brand new secret") is not None and app.users.verify("secret", password) is None
+    assert _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 200
+    password = "a brand new secret"
+    assert _call(port, "PUT", "/api/me/password", {"new": "another one entirely"}, token=tok)[0] == 400  # Ada types hers
+    page = _call(port, "GET", "/login.js")[1].decode("utf-8")
+    assert '<input id="old" type="password" value="kept-by-the-login" disabled' in page
+    assert "me.passwordless ? { new: $('new').value } : { old: $('old').value, new: $('new').value }" in page
     # the values are the database's: another name and password kept there sign that user in instead
     app.users.create("Boss", "the boss's password")
     app.users.set_setting("secret_user", "Boss")

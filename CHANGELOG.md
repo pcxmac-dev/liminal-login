@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.1 (2026-11-10)
+
+The secret user's current password is the key the login keeps (the user: "for secret user the current password should
+be a key that is greyed out, and exists but cannot be modified"): on its "Change your password" form the current
+password is there, greyed out and never typed or shown; a new one typed becomes the key the database keeps, so the way
+in by its name goes on working. Anyone else types their current password, as before. The card's "Kept at" says "over
+https" for a remote login over https, "on this machine" otherwise.
+
 ## 0.15.0 (2026-11-10)
 
 The users of other logins (the user: "make sure every login instance has a database, it's location can be remote"; "so

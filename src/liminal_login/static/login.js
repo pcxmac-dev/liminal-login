@@ -80,7 +80,7 @@
     const me = await api('GET', 'api/me');
     const pairs = (await api('GET', 'api/pairs')).pairs;
     const known = (await api('GET', 'api/pairs/known')).known;  // the pairs the plugins here ask for
-    main.innerHTML = userCard(me) + pairsTable(pairs, known) + knownTable(known) + addForm(known) + changeForm();
+    main.innerHTML = userCard(me) + pairsTable(pairs, known) + knownTable(known) + addForm(known) + changeForm(me);
     titled(me.name);
     wire(me);
     tell(true, me.name);
@@ -324,9 +324,15 @@
       <p id="addErr" class="error" style="grid-column: 1 / -1"></p></form>`;
   }
 
-  function changeForm() {
+  function changeForm(me) {
+    // the secret user (0.15.1; the user: "for secret user the current password should be a key that is greyed out, and
+    // exists but cannot be modified"): its current password is the key the login keeps for it, there but greyed out and
+    // never typed; a new one typed becomes the key kept
+    const current = me && me.passwordless
+      ? `<input id="old" type="password" value="kept-by-the-login" disabled title="The secret user's password: a key the login keeps in its database, never typed or shown">`
+      : `<input id="old" type="password" ${kb('password', 'next')} required>`;
     return `<details class="change"><summary>Change your password</summary><form id="change">
-      <div class="field"><label for="old">Current password</label><input id="old" type="password" ${kb('password', 'next')} required></div>
+      <div class="field"><label for="old">Current password${me && me.passwordless ? ' <span class="muted">(the key the login keeps)</span>' : ''}</label>${current}</div>
       <div class="field"><label for="new">New password</label><input id="new" type="password" ${kb('password', NEW_DONE)} required minlength="8"></div>
       <div class="row end"><button type="submit">Change</button></div><p id="chErr" class="error"></p></form></details>`;
   }
@@ -367,7 +373,8 @@
     });
     $('change').addEventListener('submit', async (e) => {
       e.preventDefault(); $('chErr').textContent = '';
-      try { await api('PUT', 'api/me/password', { old: $('old').value, new: $('new').value }); render(); }
+      // the secret user sends no current password: the login has it (its key)
+      try { await api('PUT', 'api/me/password', me.passwordless ? { new: $('new').value } : { old: $('old').value, new: $('new').value }); render(); }
       catch (err) { $('chErr').textContent = err.message; }
     });
   }

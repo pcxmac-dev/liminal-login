@@ -18,6 +18,7 @@ button.login-icon { margin: 0 auto 4px; padding: 4px; border: 0; border-radius: 
 .add-pair .field { margin: 0; }
 details.change { margin-top: 14px; }
 details.change summary { cursor: pointer; color: var(--muted); }
+details.change input:disabled { opacity: 0.5; cursor: not-allowed; }  /* 0.15.1: the secret user's key, there but not typed */
 .ico { vertical-align: -3px; }
 @media (max-width: 720px) { .add-pair { grid-template-columns: 1fr 1fr; } }
 /* 0.12.0, a phone (liminal.css makes the page one column scrolling as a whole below 700 px): the account's head wraps,
