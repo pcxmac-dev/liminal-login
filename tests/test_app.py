@@ -288,7 +288,7 @@ def test_the_page_answers_a_finger_and_an_on_screen_keyboard(served):
     assert status == 200 and b"window.LiminalTouch" in touch and "javascript" in r.getheader("Content-Type")
     page = _call(port, "GET", "/login.js")[1].decode("utf-8")
     for field in ("""<input id="name" type="text" ${kb('username', { inputmode: 'email' })} maxlength="254" required>""",
-                  """<input id="password" type="password" ${kb('password')} required minlength="8">""",
+                  """<input id="password" type="password" ${kb('password')} minlength="8">""",  # 0.15.4: the secret user types none
                   """<input id="email" type="email" ${kb('email')} maxlength="254">""",
                   """<input id="password" type="password" ${kb('password', NEW_NEXT)} required minlength="8">""",
                   """<input id="again" type="password" ${kb('password', NEW_DONE)} required minlength="8">""",
@@ -443,6 +443,17 @@ def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, fo
     assert "!== 'secret'" not in page and "catch (err) { if (err.status === 400 || err.status === 403) signInForm(st, name);" in page
     css = _call(port, "GET", "/login.css")[1].decode("utf-8")
     assert "button.login-icon {" in css and ":hover" not in css  # a mouse's highlight is the library's, in (hover: hover)
+    # 0.15.4 (the user, 2026-11-11: "if i type in secret w. password i can't click on the icon"): on the sign-in with a
+    # password the icon is the way in's button too, and Sign in and Enter go the same way: a password typed is tried, and
+    # with none (or one refused) the secret user's way in by the name typed; anyone else is asked for their password
+    assert '<button type="button" id="enter" class="login-icon" aria-label="Sign in to ${esc(forTitle)}">' in page
+    assert page.count('id="enter"') == 2 and page.count("$('enter').addEventListener('click', enter);") == 2
+    assert "$('signin').addEventListener('submit', (e) => { e.preventDefault(); enter(); });" in page
+    signin = page[page.index("function signInForm("):page.index("function signUp(")]
+    assert signin.index("api('POST', 'api/sign-in', { name: $('name').value, password })") < signin.index("api('POST', 'api/sign-in/secret', { name: typed })")
+    assert "if (err.status !== 401) { $('err').textContent = err.message; return; } refused = err;" in signin
+    assert "if (refused) { $('err').textContent = refused.message; return; }" in signin and "Your password is needed to sign in." in signin
+    assert """<div class="login-icon">${icon('lambda', 56)}</div>""" not in signin and "!== 'secret'" not in signin
 
 
 def test_a_user_of_another_login_signs_in_there_and_everything_they_ask_is_made_there(folder):

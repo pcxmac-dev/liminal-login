@@ -124,7 +124,7 @@
   function signInForm(st, name = '') {
     titled('sign in');
     main.innerHTML = `<div class="card center">
-      <div class="login-icon">${icon('lambda', 56)}</div>
+      <button type="button" id="enter" class="login-icon" aria-label="Sign in to ${esc(forTitle)}">${icon('lambda', 56)}</button>
       <h1>Sign in to ${esc(forTitle)}</h1>
       ${st.scope ? `<p class="muted scope">${esc(st.scope.label)}</p>` : ''}
       <p class="muted">Your account name (or email) and password open your keys and accounts. A user of another login signs in as name@their.domain: theirs does the work, over https.</p>
@@ -132,17 +132,36 @@
         <div class="field"><label for="name">Account name or email</label>
           <input id="name" type="text" ${kb('username', { inputmode: 'email' })} maxlength="254" required></div>
         <div class="field"><label for="password">Password</label>
-          <input id="password" type="password" ${kb('password')} required minlength="8"></div>
+          <input id="password" type="password" ${kb('password')} minlength="8"></div>
         <div class="row end"><button type="button" id="back">Back</button><button type="submit" class="accent">Sign in</button></div>
         <p id="err" class="error"></p></form>
     </div>`;
     $('name').value = name;
-    $('signin').addEventListener('submit', async (e) => {
-      e.preventDefault();
+    // 0.15.4 (the user, 2026-11-11: "if i type in secret w. password i can't click on the icon"): here the icon was a
+    // picture, the way in's button only on the page before. It is the way in here too, and Sign in and Enter go the same
+    // way: with a password typed, that user's sign-in; with none, or when it is refused, the secret user's way in by the
+    // name typed (it has no password to type, so whatever is in the box does not keep it out); anyone else with no
+    // password typed is asked for theirs. Which name is the secret user's stays the login's to say (400: not this one).
+    const notSecret = (err) => err.status === 400 || err.status === 403;
+    const enter = async () => {
+      const typed = $('name').value.trim(), password = $('password').value;
       $('err').textContent = '';
-      try { await api('POST', 'api/sign-in', { name: $('name').value, password: $('password').value }); $('password').value = ''; render(); }
-      catch (err) { $('err').textContent = err.message; }
-    });
+      if (!typed) { focusFirst($('name')); return; }
+      let refused = null;
+      if (password) {
+        try { await api('POST', 'api/sign-in', { name: $('name').value, password }); $('password').value = ''; render(); return; }
+        catch (err) { if (err.status !== 401) { $('err').textContent = err.message; return; } refused = err; }
+      }
+      try { await api('POST', 'api/sign-in/secret', { name: typed }); $('password').value = ''; render(); }
+      catch (err) {
+        if (refused) { $('err').textContent = refused.message; return; }  // a password typed and refused: said as it was
+        if (!notSecret(err)) { $('err').textContent = err.message; return; }
+        $('err').textContent = 'Your password is needed to sign in.';
+        focusFirst($('password'));
+      }
+    };
+    $('enter').addEventListener('click', enter);
+    $('signin').addEventListener('submit', (e) => { e.preventDefault(); enter(); });
     $('back').addEventListener('click', () => entryForm(st));
     focusFirst(name ? $('password') : $('name'));
   }

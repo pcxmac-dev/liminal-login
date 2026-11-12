@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.4 (2026-11-11)
+
+On the sign-in with a password the icon is the way in too (the user: "if i type in secret w. password i can't click on
+the icon"). The lambda was a button only on the page before it (the user's name, then the icon); on the sign-in with a
+password it was a picture, so the secret user's name typed there and the icon clicked did nothing, and Sign in refused
+an empty password. Now the icon there is the same button, and Sign in and Enter go the same way: a password typed is
+tried as that user's; with none typed, or when it is refused, the name is asked the secret user's way in (it has no
+password to type, so whatever is in the box does not keep it out); anyone else with no password typed is told theirs is
+needed. Which name is the secret user's is still the login's to say, and a domain's login still has none. The page
+alone changed: a login already running serves it at its next reload.
+
 ## 0.15.3 (2026-11-10)
 
 Held in another app's page (?embedded=1), the login draws no frame or colour of its own (the user, of a lighter box
