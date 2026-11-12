@@ -11,6 +11,10 @@ password to type, so whatever is in the box does not keep it out); anyone else w
 needed. Which name is the secret user's is still the login's to say, and a domain's login still has none. The page
 alone changed: a login already running serves it at its next reload.
 
+A login that does not answer at all says so (the user, of a page whose login had been stopped: "getting a failed to
+fetch"): "The login is not answering at HOST: it may have stopped. Start it again (or the app that holds it), then
+reload this page", where the page showed the browser's own words.
+
 ## 0.15.3 (2026-11-10)
 
 Held in another app's page (?embedded=1), the login draws no frame or colour of its own (the user, of a lighter box

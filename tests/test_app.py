@@ -454,6 +454,8 @@ def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, fo
     assert "if (err.status !== 401) { $('err').textContent = err.message; return; } refused = err;" in signin
     assert "if (refused) { $('err').textContent = refused.message; return; }" in signin and "Your password is needed to sign in." in signin
     assert """<div class="login-icon">${icon('lambda', 56)}</div>""" not in signin and "!== 'secret'" not in signin
+    # a login that does not answer at all is said to have stopped, not "Failed to fetch" (the user: "getting a failed to fetch")
+    assert "throw new Error(`The login is not answering at ${location.host}: it may have stopped." in page
 
 
 def test_a_user_of_another_login_signs_in_there_and_everything_they_ask_is_made_there(folder):

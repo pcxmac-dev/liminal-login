@@ -54,8 +54,15 @@
   }
 
   async function api(method, path, body) {
-    const r = await fetch(path, { method, headers: method === 'GET' ? {} : WRITE,
-      body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin' });
+    let r;
+    try {
+      r = await fetch(path, { method, headers: method === 'GET' ? {} : WRITE,
+        body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin' });
+    } catch (e) {
+      // no answer at all (0.15.4; the user, of a page whose login had been stopped: "getting a failed to fetch"): said as
+      // what it is, not in the browser's words
+      throw new Error(`The login is not answering at ${location.host}: it may have stopped. Start it again (or the app that holds it), then reload this page.`);
+    }
     let data = null;
     try { data = await r.json(); } catch (e) { data = null; }
     if (!r.ok) {
