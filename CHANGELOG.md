@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.0 (2026-11-14)
+
+An app that inherits the login holds it as an object of its own (the user: "the platform and integrator inherit the
+login function, they are separate login instances, class vs object"; "login doesn't point to anything except the app
+that inherited it"; liminal-libs 1.52.0 `App.login_object`). `LoginApp(superclass=<the app>)` takes the app object
+itself: its name and title as before (its users' folder and cookie), the pairs its plugins ask for asked of that app
+directly (`Superclass.app`), no address, no port of its own (`port()` and `url()` are the app's, under /login/).
+Nothing starts a login for an app any more and no login listens beside it (the user: "i only want ports for
+liminal-login ; liminal-platform ; liminal-charts ; liminal-integrator"; "don't start any of the applications in the
+background"). A login run on its own (`liminal-login serve`, 8795) points to nothing; `--for`/LIMINAL_LOGIN_FOR still
+names a superclass at an address for one run that way.
+
 ## 0.15.4 (2026-11-11)
 
 On the sign-in with a password the icon is the way in too (the user: "if i type in secret w. password i can't click on

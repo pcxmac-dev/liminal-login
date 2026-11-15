@@ -8,10 +8,13 @@ new user, password, etcc"; 2026-11-10: "the log-in app should not point to platf
 charts, it should be standalone"; "when its inherited it can point to it's superclass, charts, platform,
 or integrator"): an App of the library's frame (liminal_libs.apps) with the one master icon, the user.
 On its own it knows no other app: its users live in its own folder, under its own cookie, and the page
-names it by its scope's title. An app that inherits it (its superclass) says so when it starts it
-(liminal_libs.apps.inherited_by: LIMINAL_LOGIN_FOR and its title and address): that superclass's users
-then live in a folder of its own here, with its own cookie, the page names it, and the pairs its
-plugins ask for are asked of it (GET /api/login/pairs), never read from a plugin here. A sign-up begins with an
+names it by its scope's title. An app that inherits it (its superclass: charts, platform, integrator) holds it
+as an object of its own, in its own process and at its own port (0.16.0; the user, 2026-11-14: "the platform and
+integrator inherit the login function, they are separate login instances, class vs object"; "login doesn't point to
+anything except the app that inherited it"; liminal_libs.apps.App.login_object): that superclass's users then live
+in a folder of its own here, with its own cookie, the page names it, and the pairs its plugins ask for are asked of
+that app itself, never read from a plugin here. A login run on its own for a superclass (LIMINAL_LOGIN_FOR and its
+title and address, liminal_libs.apps.inherited_by) asks it at its address (GET /api/login/pairs) as before. A sign-up begins with an
 email; a six-digit code goes to it through the user's own mail account (liminal_libs.mail); typed
 back, the name and the password are chosen and the account is made and signed in. Sessions live in
 memory: a token in the page's cookie and in a client's X-Liminal-Session header, the user's vault
@@ -28,7 +31,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import unquote, urlencode
@@ -83,13 +86,15 @@ MX_SECONDS = 600.0  # a domain's mail record is looked up again after this long
 
 @dataclass(frozen=True)
 class Superclass:
-    """The app that inherits this login, its superclass (charts, platform, integrator, or an app to come), as it said
-    when it started the login: its short name (its users' folder and cookie here), how the page names it, and where it
-    answers the pairs its plugins ask for (PAIRS_PATH). The login knows nothing else of it."""
+    """The app that inherits this login, its superclass (charts, platform, integrator, or an app to come): its short name
+    (its users' folder and cookie here), how the page names it, and either the app itself (`app`, 0.16.0: the login an
+    object in it, asked directly) or where it answers the pairs its plugins ask for (`url`, PAIRS_PATH: a login run on
+    its own for it). The login knows nothing else of it, and points to nothing else."""
 
     name: str
     title: str = ""
     url: str = ""
+    app: object = field(default=None, compare=False, repr=False)
 
     def describe(self) -> dict:
         return {"name": self.name, "title": self.title, "url": self.url}
@@ -109,6 +114,18 @@ def superclass_of(name=None, title=None, url=None, env=None) -> Superclass | Non
     if where and not where.lower().startswith(("http://", "https://")):
         raise ValueError(f"the address of the app that inherits a login is an http(s) URL, not {where!r}")
     return Superclass(raw, shown, where)
+
+
+def superclass_from(given) -> Superclass | None:
+    """The superclass a login is made with: a Superclass as given; the app object that inherits it (0.16.0: anything with
+    a NAME, its TITLE how the page names it; the pairs asked of it directly, no address); else a short name, or the
+    environment's (superclass_of)."""
+    if isinstance(given, Superclass):
+        return given
+    if given is not None and not isinstance(given, str) and getattr(given, "NAME", ""):
+        named = superclass_of(str(given.NAME), str(getattr(given, "TITLE", "") or "") or None, env={})
+        return Superclass(named.name, named.title, "", given)
+    return superclass_of(given)
 
 
 def remote_tls() -> ssl.SSLContext:
@@ -183,7 +200,7 @@ class LoginApp(App):
         super().__init__(log)
         # the app that inherits this login, as it said (a Superclass, or its short name), else LIMINAL_LOGIN_FOR; none:
         # the login on its own
-        self.superclass = superclass if isinstance(superclass, Superclass) else superclass_of(superclass)
+        self.superclass = superclass_from(superclass)
         # What this login is tied to (liminal_libs.apps.scope; the user, 2026-11-06: "login apps tied to domains
         # (with email server) or local (file://project/folder)"): the scope given, else the file found (not
         # when the users' folder is given outright: a test's), else local to the folder, else to the workspace
@@ -223,11 +240,30 @@ class LoginApp(App):
         return {**super().describe(), "for": self.namespace, "forTitle": self.title_for,
                 "superclass": self.superclass.describe() if self.superclass is not None else None, "scope": self.scope.describe()}
 
+    @property
+    def holder(self):
+        """The app that holds this login as an object of its own (its superclass, 0.16.0); None for a login on its own."""
+        return self.superclass.app if self.superclass is not None else None
+
     def port(self) -> int:
-        """LIMINAL_LOGIN_PORT, else the scope's file's port, else 8795 (an app that inherits the login starts it at the
-        port it binds: `--port`)."""
+        """LIMINAL_LOGIN_PORT, else the scope's file's port, else 8795; a login held by the app that inherits it has no
+        port of its own: that app's (0.16.0)."""
+        if self.holder is not None:
+            served = str(getattr(self.holder, "served", None) or "").rstrip("/")
+            tail = served.rsplit(":", 1)[-1] if served.count(":") >= 2 else ""
+            if tail.isdecimal():
+                return int(tail)  # where the app is served (its own port, or a test's free one)
+            if callable(getattr(self.holder, "port", None)):
+                return self.holder.port()
         raw = (os.environ.get(self.PORT_VAR) or "").strip()
         return int(raw) if raw.isdecimal() else (self.scope.port or self.PORT)
+
+    def url(self, port: int | None = None) -> str:
+        """Where its page is: a login held by the app that inherits it, under that app's /login/ (0.16.0)."""
+        if self.holder is not None and port is None:
+            served = getattr(self.holder, "served", None) or self.holder.url()
+            return served.rstrip("/") + "/login/"
+        return super().url(port)
 
     # -- whether an account can be made with a code (the user, 2026-11-06: "only allow signup if the login app
     # is tied to an smtp server"; "domain w/ email server in mail record (lookup) or specified if none") -----
@@ -665,14 +701,15 @@ class LoginApp(App):
         """The pairs the superclass's plugins ask for (the user, 2026-11-06: "By the variables": `massive-api-key` for
         MASSIVE_API_KEY), each marked whether the signed-in user has it. Asked of the superclass, since the login knows
         no plugin itself (0.13.0, the user: "the log-in app should not point to platform, integrator or charts"); none
-        for the login on its own, or when its superclass gives no address or does not answer."""
+        for the login on its own, or when its superclass gives neither itself nor an address, or does not answer."""
         have = {p["name"] for p in s.vault.names()} if s is not None else set()
         return [{**r, "set": r["name"] in have} for r in self.superclass_pairs()]
 
     def superclass_pairs(self) -> list[dict]:
-        """The superclass's word on the pairs its plugins ask for (GET <its address>/api/login/pairs), kept a minute."""
+        """The superclass's word on the pairs its plugins ask for (asked of the app itself when it holds this login, else
+        GET <its address>/api/login/pairs), kept a minute."""
         sup = self.superclass
-        if sup is None or not sup.url:
+        if sup is None or not (sup.app is not None or sup.url):
             return []
         now = time.monotonic()
         with self._lock:
@@ -685,16 +722,24 @@ class LoginApp(App):
         return rows
 
     def _ask_pairs(self, sup: Superclass) -> list[dict]:
-        """One question to the superclass, never through a proxy; its rows kept as data (a name a pair can have, the
-        fields the page shows), anything else dropped. A superclass that does not answer: none, said in the log."""
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        request = urllib.request.Request(sup.url + PAIRS_PATH, headers={"Accept": "application/json"})
-        try:
-            with opener.open(request, timeout=3) as r:
-                data = json.loads(r.read(1_000_000))
-        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
-            self.log(f"login: {sup.title} did not say which pairs its plugins ask for ({sup.url}{PAIRS_PATH}: {e})")
-            return []
+        """One question to the superclass: the app itself when it holds this login (0.16.0), else at its address, never
+        through a proxy; its rows kept as data (a name a pair can have, the fields the page shows), anything else
+        dropped. A superclass that does not answer: none, said in the log."""
+        if sup.app is not None:
+            try:
+                data = {"pairs": list(sup.app.login_pairs())}
+            except Exception as e:  # noqa: BLE001 - the app's fault: no pairs, said
+                self.log(f"login: {sup.title} did not say which pairs its plugins ask for ({type(e).__name__}: {e})")
+                return []
+        else:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            request = urllib.request.Request(sup.url + PAIRS_PATH, headers={"Accept": "application/json"})
+            try:
+                with opener.open(request, timeout=3) as r:
+                    data = json.loads(r.read(1_000_000))
+            except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+                self.log(f"login: {sup.title} did not say which pairs its plugins ask for ({sup.url}{PAIRS_PATH}: {e})")
+                return []
         rows = []
         for r in (data.get("pairs") if isinstance(data, dict) else None) or []:
             if isinstance(r, dict) and isinstance(r.get("name"), str) and PAIR_NAME.match(r["name"]):
