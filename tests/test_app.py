@@ -390,19 +390,23 @@ def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, fo
     name, password = app.users.secret_kept()
     assert name == "secret" and len(password) >= 24 and app.users.setting("secret_user") == "secret"
     assert app.users.verify("secret", "liminal-secret-user") is None and not any(password in m for m in lines)
-    # 0.15.1 (the user: "for secret user the current password should be a key that is greyed out, and exists but cannot
-    # be modified"): the secret user changes its password without typing the current one (the key the login keeps), and
-    # the new one becomes the key kept, so the way in goes on working; anyone else still types theirs
+    # 0.16.1 (the user, 2026-11-15: "secret should not be able to change it's own password under login"; 2026-11-10: its
+    # password "exists but cannot be modified"; 0.15.1 let a new one replace the key): the secret user's password is never
+    # changed, in by its name or with the key itself, and the way in by its name goes on working; anyone else still types
+    # theirs. The page draws a line saying so where the form would be.
     secret_session = _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[1]["token"]
     status, data, _ = _call(port, "PUT", "/api/me/password", {"new": "a brand new secret"}, token=secret_session)
-    assert status == 200 and data["changed"] is True and app.users.secret_kept() == ("secret", "a brand new secret")
-    assert app.users.verify("secret", "a brand new secret") is not None and app.users.verify("secret", password) is None
+    assert status == 403 and data["error"].endswith("cannot be changed")
+    assert _call(port, "PUT", "/api/me/password", {"old": password, "new": "a brand new secret"}, token=secret_session)[0] == 403
+    keyed = _call(port, "POST", "/api/sign-in", {"name": "secret", "password": password})[1]["token"]  # in with the key
+    assert _call(port, "PUT", "/api/me/password", {"old": password, "new": "a brand new secret"}, token=keyed)[0] == 403
+    assert app.users.secret_kept() == ("secret", password) and app.users.verify("secret", password) is not None
+    assert app.users.verify("secret", "a brand new secret") is None
     assert _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 200
-    password = "a brand new secret"
     assert _call(port, "PUT", "/api/me/password", {"new": "another one entirely"}, token=tok)[0] == 400  # Ada types hers
     page = _call(port, "GET", "/login.js")[1].decode("utf-8")
-    assert '<input id="old" type="password" value="kept-by-the-login" disabled' in page
-    assert "me.passwordless ? { new: $('new').value } : { old: $('old').value, new: $('new').value }" in page
+    assert "kept-by-the-login" not in page and "if (me && me.passwordless) return `<p class=\"muted kept\">" in page
+    assert "{ old: $('old').value, new: $('new').value }" in page and "if (change) change.addEventListener('submit'" in page
     # the values are the database's: another name and password kept there sign that user in instead
     app.users.create("Boss", "the boss's password")
     app.users.set_setting("secret_user", "Boss")
@@ -502,6 +506,9 @@ def test_a_user_of_another_login_signs_in_there_and_everything_they_ask_is_made_
         status, data, _ = _call(lport, "POST", "/api/sign-in/secret", {"name": "secret@remote.test"})  # their secret user
         assert status == 200 and data["user"]["name"] == "secret@remote.test" and data["passwordless"] is True
         assert remote.users.secret_kept() is not None and local.users.secret_kept() is None
+        kept_there = remote.users.secret_kept()  # their secret user's password: refused here, never asked there (0.16.1)
+        assert _call(lport, "PUT", "/api/me/password", {"new": "a brand new secret"}, headers={SESSION_HEADER: data["token"]})[0] == 403
+        assert remote.users.secret_kept() == kept_there
         local.users.create("Bo", "bo's own password", "bo@remote.test")  # a user here with that address: this login's own
         status, data, _ = _call(lport, "POST", "/api/sign-in", {"name": "bo@remote.test", "password": "bo's own password"})
         assert status == 200 and data["user"]["name"] == "Bo"

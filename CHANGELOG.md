@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.1 (2026-11-15)
+
+The secret user's password is never changed (the user: "secret should not be able to change it's own password under
+login"; on 2026-11-10 it was to exist "but cannot be modified"). 0.15.1 had the page offer a new password in place of the
+key the login keeps. Now `PUT /api/me/password` answers 403 for the secret user, whether it came in by its name or with the
+key itself, and for a remote login's secret user too, refused here without asking that login. The page draws a line saying
+so where the password form would be. Anyone else changes theirs as before, typing the current one.
+
 ## 0.16.0 (2026-11-14)
 
 An app that inherits the login holds it as an object of its own (the user: "the platform and integrator inherit the

@@ -354,14 +354,12 @@
   }
 
   function changeForm(me) {
-    // the secret user (0.15.1; the user: "for secret user the current password should be a key that is greyed out, and
-    // exists but cannot be modified"): its current password is the key the login keeps for it, there but greyed out and
-    // never typed; a new one typed becomes the key kept
-    const current = me && me.passwordless
-      ? `<input id="old" type="password" value="kept-by-the-login" disabled title="The secret user's password: a key the login keeps in its database, never typed or shown">`
-      : `<input id="old" type="password" ${kb('password', 'next')} required>`;
+    // the secret user (0.16.1; the user, 2026-11-15: "secret should not be able to change it's own password under login";
+    // 2026-11-10: its password "exists but cannot be modified"): no form, a line saying so; its password is the key the
+    // login keeps (0.15.1 offered a new one in its place, and the server refuses that now)
+    if (me && me.passwordless) return `<p class="muted kept">The secret user's password is a key the login keeps: it is never typed and cannot be changed.</p>`;
     return `<details class="change"><summary>Change your password</summary><form id="change">
-      <div class="field"><label for="old">Current password${me && me.passwordless ? ' <span class="muted">(the key the login keeps)</span>' : ''}</label>${current}</div>
+      <div class="field"><label for="old">Current password</label><input id="old" type="password" ${kb('password', 'next')} required></div>
       <div class="field"><label for="new">New password</label><input id="new" type="password" ${kb('password', NEW_DONE)} required minlength="8"></div>
       <div class="row end"><button type="submit">Change</button></div><p id="chErr" class="error"></p></form></details>`;
   }
@@ -400,10 +398,10 @@
         render();
       } catch (err) { $('addErr').textContent = err.message; }
     });
-    $('change').addEventListener('submit', async (e) => {
+    const change = $('change');  // none for the secret user (0.16.1)
+    if (change) change.addEventListener('submit', async (e) => {
       e.preventDefault(); $('chErr').textContent = '';
-      // the secret user sends no current password: the login has it (its key)
-      try { await api('PUT', 'api/me/password', me.passwordless ? { new: $('new').value } : { old: $('old').value, new: $('new').value }); render(); }
+      try { await api('PUT', 'api/me/password', { old: $('old').value, new: $('new').value }); render(); }
       catch (err) { $('chErr').textContent = err.message; }
     });
   }

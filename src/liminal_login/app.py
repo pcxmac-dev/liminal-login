@@ -68,6 +68,9 @@ FAILURE_DELAY_S = 0.5  # after a wrong name or password: no guessing at speed
 # in the code; a user of that name who has a password of their own is never let in this way, nor is anyone on a
 # domain's login. 0.14.0 wrote one password here: a secret user made with it moves onto a random one in the database.
 LEGACY_SECRET_PASSWORDS = ("liminal-secret-user",)
+# The secret user's password is never changed (0.16.1; the user, 2026-11-15: "secret should not be able to change it's own
+# password under login"; 2026-11-10: it "exists but cannot be modified"): what a change is answered with
+SECRET_PASSWORD_KEPT = "the secret user's password is a key the login keeps: it is never typed and cannot be changed"
 CODE_SUBJECT = "Your {title} code"
 CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
              "Type it on the page that asked for it within {minutes:g} minutes. If you did not ask for an "
@@ -491,6 +494,17 @@ class LoginApp(App):
             data = {**data, "name": s.user.name, "remote": s.remote, "passwordless": s.passwordless or bool(data.get("passwordless"))}
         return status, data
 
+    def _secret_password_kept(self, s) -> bool:
+        """Whether a session's user is a secret user, whose password is a key its login keeps and is never changed (0.16.1):
+        in without a password (this login's secret user, or a remote login's), or this login's secret user however it came
+        in (with the key itself)."""
+        if s.passwordless:
+            return True
+        if isinstance(s, RemoteSession):
+            return False
+        kept = self.users.secret_kept()
+        return kept is not None and kept[0].lower() == s.user.name.lower()
+
     def _secret_sign_in(self, body: dict):
         """The secret user in without a password: a local login only. The name typed is checked against the one the
         database keeps (`secret` before it is made); the user is made the first time, its password a random one kept in
@@ -525,6 +539,12 @@ class LoginApp(App):
     # -- the routes ------------------------------------------------------------------------------
     def api(self, handler, method: str, path: str, query: dict, body: dict | None):
         body = body or {}
+        if path == "/api/me/password" and method == "PUT":
+            # a secret user's password is never changed (0.16.1; 0.15.1 let a new one replace the key the login keeps):
+            # refused here before anything, a remote login's secret user too (never asked there)
+            s = self.session(handler)
+            if s is not None and self._secret_password_kept(s):
+                raise Refused(HTTPStatus.FORBIDDEN, SECRET_PASSWORD_KEPT)
         if path in REMOTE_ROUTES or (path.startswith("/api/pairs/") and path != "/api/pairs/known"):
             s = self.session(handler)
             if isinstance(s, RemoteSession):  # a user of another login: asked there (0.15.0)
@@ -588,19 +608,12 @@ class LoginApp(App):
         if path == "/api/me" and method == "GET":
             return 200, self._me(self._require(handler))
         if path == "/api/me/password" and method == "PUT":
-            s = self._require(handler)
-            # the secret user (0.15.1): its current password is the key the login keeps, never typed; the new one becomes
-            # the key kept, so the way in by its name goes on working
-            kept = self.users.secret_kept() if s.passwordless else None
-            if s.passwordless and (kept is None or kept[0].lower() != s.user.name.lower()):
-                raise Refused(HTTPStatus.CONFLICT, "the login no longer keeps this user's password: sign in again")
+            s = self._require(handler)  # never the secret user: refused at the head of api() (0.16.1)
             try:
-                s.user = self.users.change_password(s.user.name, kept[1] if kept else body.get("old"), body.get("new"))
+                s.user = self.users.change_password(s.user.name, body.get("old"), body.get("new"))
             except ValueError as e:
                 raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
-            if kept:
-                self.users.set_setting("secret_password", str(body.get("new")))
-            self.log(f"login: {s.user.name} changed their password" + (" (the key the login keeps)" if kept else ""))
+            self.log(f"login: {s.user.name} changed their password")
             return 200, {"changed": True, "unlockFingerprint": s.user.unlock_fingerprint}
         if path == "/api/pairs" and method == "GET":
             return 200, {"pairs": self._require(handler).vault.names()}
