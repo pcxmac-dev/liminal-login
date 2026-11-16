@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.1 (2026-11-15)
+
+Two suites on one machine no longer sign each other out (the user: "i need to run the same suite in a WSL container";
+the suite inside WSL answers at 127.0.0.1 like Windows', on ports of its own). A cookie belongs to a host, whatever the
+port: both logins kept their session under `liminal_login`, so signing in to one replaced the other's, and that one
+found a session it did not know and showed its sign-in again. A login set to answer anywhere but at its usual port now
+carries that port in its cookie's name: `liminal_login_9795` on its own, `liminal_login_platform_9775` held by an app
+whose port is set so. At the usual ports nothing changes, and nobody is signed out by this. `serve --port N` sets the
+port for the whole run (its address, its cookie: `LoginApp(port=N)`), as LIMINAL_LOGIN_PORT does.
+
 ## 0.17.0 (2026-11-15)
 
 A second user comes in without a password, `default` (the user: "create a second 'default' user with no login, to test

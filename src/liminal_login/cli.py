@@ -66,7 +66,8 @@ def _log(folder: Path) -> Logger:
 
 def cmd_serve(args) -> int:
     folder = _dir(args)
-    app = LoginApp(_root(args), log=_log(folder), superclass=_superclass(args), scope=_scope(args))
+    # the port it is told is the port it is set to: its address and its cookie's name follow (0.17.1)
+    app = LoginApp(_root(args), log=_log(folder), superclass=_superclass(args), scope=_scope(args), port=args.port)
     port = args.port if args.port is not None else app.port()
     print(f"login app for {app.title_for}: its page at {app.url(port)} (the folder {folder}; {app.mail_words()}; "
           "Ctrl+C to stop)", flush=True)

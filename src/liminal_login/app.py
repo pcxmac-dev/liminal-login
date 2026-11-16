@@ -204,8 +204,10 @@ class LoginApp(App):
     API = "1.3"  # 1.3 (0.13.0): on its own unless inherited; `for` null on its own, `superclass` in the status
 
     def __init__(self, directory: Path | None = None, log=print, failure_delay: float = FAILURE_DELAY_S, mailer=None,
-                 superclass: Superclass | str | None = None, scope: Scope | None = None, remotes: dict | None = None):
+                 superclass: Superclass | str | None = None, scope: Scope | None = None, remotes: dict | None = None,
+                 port: int | None = None):
         super().__init__(log)
+        self._port_told = port  # the port it was told to answer at (`serve --port`): before its variable and its file
         # the app that inherits this login, as it said (a Superclass, or its short name), else LIMINAL_LOGIN_FOR; none:
         # the login on its own
         self.superclass = superclass_from(superclass)
@@ -217,8 +219,8 @@ class LoginApp(App):
         sup = self.superclass
         self.title_for = sup.title if sup is not None else (self.scope.title or "Liminal")  # what the page names
         self.TITLE = f"Login: {sup.title}" if sup is not None else "Login"
-        # cookies ignore ports: one a superclass, and the login's own
-        self.cookie_name = f"liminal_login_{sup.name.replace('-', '_')}" if sup is not None else "liminal_login"
+        # cookies ignore ports: one a superclass, and the login's own (cookie_name adds the port where it must)
+        self._cookie_base = f"liminal_login_{sup.name.replace('-', '_')}" if sup is not None else "liminal_login"
         self.root = Path(directory) if directory else (login_dir() if (os.environ.get(DIR_VAR) or "").strip()
                                                        else self.scope.data_dir(login_dir()))
         self.dir = folder_for(self.root, self.scope, sup)
@@ -253,6 +255,29 @@ class LoginApp(App):
         """The app that holds this login as an object of its own (its superclass, 0.16.0); None for a login on its own."""
         return self.superclass.app if self.superclass is not None else None
 
+    @property
+    def cookie_name(self) -> str:
+        """Its session cookie's name: `liminal_login` on its own, `liminal_login_<app>` held by an app; and, set to
+        answer anywhere but at its usual port, with that port (`liminal_login_9795`, `liminal_login_platform_9775`;
+        0.17.1). Cookies ignore ports: a second suite on the same machine (the one inside WSL beside Windows', both
+        at 127.0.0.1; the user, 2026-11-15: "i need to run the same suite in a WSL container") took the first one's
+        session with every sign-in, each signing the browser out of the other. The port is the one it is set to
+        (`serve --port`, its variable, its scope's file; the holder's variable), not a test's free one."""
+        port, usual = self._set_port()
+        return self._cookie_base if port is None or port == usual else f"{self._cookie_base}_{port}"
+
+    def _set_port(self) -> tuple[int | None, int | None]:
+        """The port this login is set to answer at and its usual one: its own, or the app's that holds it."""
+        holder = self.holder
+        if holder is not None:
+            if callable(getattr(holder, "port", None)) and isinstance(getattr(holder, "PORT", None), int):
+                return holder.port(), holder.PORT
+            return None, None
+        if self._port_told is not None:
+            return self._port_told, self.PORT
+        raw = (os.environ.get(self.PORT_VAR) or "").strip()
+        return (int(raw) if raw.isdecimal() else (self.scope.port or self.PORT)), self.PORT
+
     def port(self) -> int:
         """LIMINAL_LOGIN_PORT, else the scope's file's port, else 8795; a login held by the app that inherits it has no
         port of its own: that app's (0.16.0)."""
@@ -263,6 +288,8 @@ class LoginApp(App):
                 return int(tail)  # where the app is served (its own port, or a test's free one)
             if callable(getattr(self.holder, "port", None)):
                 return self.holder.port()
+        if self._port_told is not None:
+            return self._port_told
         raw = (os.environ.get(self.PORT_VAR) or "").strip()
         return int(raw) if raw.isdecimal() else (self.scope.port or self.PORT)
 
