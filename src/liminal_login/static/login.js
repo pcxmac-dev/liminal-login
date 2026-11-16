@@ -113,7 +113,8 @@
         <p id="err" class="error">${esc(said)}</p>
       </form></div>`;
     // the secret user's name is the login's own, a value in its database (0.14.1): asked of it, never written here;
-    // anyone else (400), or any name on a domain's login (403), goes on to their password
+    // `default` comes in the same way (0.17.0: a second user without a password); anyone else (400), or any name on
+    // a domain's login (403), goes on to their password
     const enter = async () => {
       const name = $('user').value.trim();
       $('err').textContent = '';
@@ -302,9 +303,9 @@
   function userCard(me) {
     const s = me.store, kdf = s.kdf || {};
     return `<div class="user-head"><div class="avatar">${esc(me.name[0].toUpperCase())}</div>
-        <div><h1>${esc(me.name)}</h1><div class="muted">${me.email ? `${esc(me.email)}${me.verified ? ' (verified)' : ' (not verified)'} · ` : ''}${esc(forTitle)}; signed in; this session ends after ${esc(me.session.minutes)} minutes without a request</div></div>
+        <div><h1>${esc(me.name)}</h1><div class="muted">${me.email ? `${esc(me.email)}${me.verified ? ' (verified)' : ' (not verified)'} · ` : ''}${me.admin ? "this login's admin · " : ''}${esc(forTitle)}; signed in; this session ends after ${esc(me.session.minutes)} minutes without a request</div></div>
         <div class="row" style="margin-left:auto"><button type="button" id="signout" title="Sign out: your store closes">${icon('logout', 18)} Sign out</button></div></div>
-      ${me.passwordless ? '<p class="muted note">The secret user: in without a password, so its keys are not protected by one.</p>' : ''}
+      ${me.passwordless ? `<p class="muted note">${me.admin ? 'The secret user' : 'This user'} comes in without a password, so its keys are not protected by one.</p>` : ''}
       <h2>Your store</h2>
       <dl class="facts">
         <dt>Created</dt><dd>${esc(when(me.createdAt))}</dd>
@@ -357,7 +358,8 @@
     // the secret user (0.16.1; the user, 2026-11-15: "secret should not be able to change it's own password under login";
     // 2026-11-10: its password "exists but cannot be modified"): no form, a line saying so; its password is the key the
     // login keeps (0.15.1 offered a new one in its place, and the server refuses that now)
-    if (me && me.passwordless) return `<p class="muted kept">The secret user's password is a key the login keeps: it is never typed and cannot be changed.</p>`;
+    // `default` too (0.17.0): whoever comes in without a password has one the login keeps
+    if (me && me.passwordless) return `<p class="muted kept">This user's password is a key the login keeps: it is never typed and cannot be changed.</p>`;
     return `<details class="change"><summary>Change your password</summary><form id="change">
       <div class="field"><label for="old">Current password</label><input id="old" type="password" ${kb('password', 'next')} required></div>
       <div class="field"><label for="new">New password</label><input id="new" type="password" ${kb('password', NEW_DONE)} required minlength="8"></div>

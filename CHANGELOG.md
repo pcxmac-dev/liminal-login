@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.17.0 (2026-11-15)
+
+A second user comes in without a password, `default` (the user: "create a second 'default' user with no login, to test
+multiple logins and see if the code holds"). Its name typed and the icon clicked sign it in, as the secret user's do. It
+is made the first time, its random password kept in the login's database (`settings`, `passwordless:default`), and that
+password is never changed, like the secret user's. A user named `default` who has a password of their own is never let
+in this way, and a domain's login has no such user. It is an ordinary user. Any other name kept under `passwordless:`
+comes in the same way (`UserStore.make_passwordless`); only `default` is made by asking for it.
+
+The secret user is the login's admin (the user: "let the secret user be the admin, and allow secret to alter the global
+page/tab of the plugin and where it points to to get user/keystore data"). `/api/me`, `/api/status` and every sign-in's
+answer say `admin`: true for this login's secret user alone, however it came in (by its name, or with the key itself);
+never for `default`, and never for a user of another login, whatever they are at their own. `LoginApp.is_admin(session)`
+is what a route asks. Nothing is restricted by it yet: the datastore plugin's Global tab is its first use. The page
+says "this login's admin" under the name.
+
+The tests sign both users in at once (tests/test_two_users.py): each session is its own user with its own store, a pair
+of the same name holds a value each, one signing out leaves the other in, many sign-ins at the same moment make each
+user once and cross no session, and the same holds under an app that holds the login as an object.
+
 ## 0.16.1 (2026-11-15)
 
 The secret user's password is never changed (the user: "secret should not be able to change it's own password under

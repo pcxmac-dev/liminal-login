@@ -505,6 +505,8 @@ def test_a_user_of_another_login_signs_in_there_and_everything_they_ask_is_made_
         assert _call(lport, "GET", "/api/me", headers=session)[0] == 401
         status, data, _ = _call(lport, "POST", "/api/sign-in/secret", {"name": "secret@remote.test"})  # their secret user
         assert status == 200 and data["user"]["name"] == "secret@remote.test" and data["passwordless"] is True
+        # 0.17.0 (the user, 2026-11-15: "let the secret user be the admin"): their login's admin, never this one's
+        assert data["admin"] is False and _call(lport, "GET", "/api/me", headers={SESSION_HEADER: data["token"]})[1]["admin"] is False
         assert remote.users.secret_kept() is not None and local.users.secret_kept() is None
         kept_there = remote.users.secret_kept()  # their secret user's password: refused here, never asked there (0.16.1)
         assert _call(lport, "PUT", "/api/me/password", {"new": "a brand new secret"}, headers={SESSION_HEADER: data["token"]})[0] == 403

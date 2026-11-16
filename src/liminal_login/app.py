@@ -44,7 +44,7 @@ from liminal_libs.layout import data_dir
 from liminal_libs.mail import MailError, Mailer, mask, mx_records
 from liminal_libs.web import WRITE_HEADER
 from . import __version__
-from .users import CODE_MINUTES, User, UserStore
+from .users import CODE_MINUTES, DEFAULT_NAME, User, UserStore
 from .vault import PAIR_NAME, KeyPairStore, store_file
 
 DIR_VAR = "LIMINAL_LOGIN_DIR"  # the login's folder (store/data/login by default): its own users, a superclass's folder each
@@ -70,7 +70,12 @@ FAILURE_DELAY_S = 0.5  # after a wrong name or password: no guessing at speed
 LEGACY_SECRET_PASSWORDS = ("liminal-secret-user",)
 # The secret user's password is never changed (0.16.1; the user, 2026-11-15: "secret should not be able to change it's own
 # password under login"; 2026-11-10: it "exists but cannot be modified"): what a change is answered with
-SECRET_PASSWORD_KEPT = "the secret user's password is a key the login keeps: it is never typed and cannot be changed"
+SECRET_PASSWORD_KEPT = "this user's password is a key the login keeps: it is never typed and cannot be changed"
+# A second user in without a password, `default` (0.17.0; the user, 2026-11-15: "create a second 'default' user with no
+# login, to test multiple logins and see if the code holds"): made the first time its name is typed, as the secret user
+# is, and in the same way in (the name, then the icon). It is an ordinary user. The secret user is the login's admin
+# (the same day: "let the secret user be the admin"): `admin` in /api/me, for what only the admin may change.
+NOT_PASSWORDLESS = "only the secret and the default users come in without a password: sign in with yours"
 CODE_SUBJECT = "Your {title} code"
 CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
              "Type it on the page that asked for it within {minutes:g} minutes. If you did not ask for an "
@@ -406,7 +411,7 @@ class LoginApp(App):
     def _signed_in(self, user: User, status: int = 200):
         s = self._open(user)
         self.log(f"login: {user.name} signed in")
-        return status, {"token": s.token, "user": user.as_dict()}, self._cookie(s.token)
+        return status, {"token": s.token, "user": user.as_dict(), "admin": self.is_admin(s)}, self._cookie(s.token)
 
     # -- the users of other logins (0.15.0): name@their.domain signs in at their own login, which does the work -----
     def remote_url(self, host: str) -> str:
@@ -482,7 +487,9 @@ class LoginApp(App):
         with self._lock:
             self._sessions[s.token] = s
         self.log(f"login: {who} signed in at {base}")
-        return 200, {"token": s.token, "user": {"name": who, "remote": base}, "passwordless": s.passwordless}, self._cookie(s.token)
+        # their own login's admin, perhaps: never this one's (0.17.0)
+        return 200, {"token": s.token, "user": {"name": who, "remote": base}, "passwordless": s.passwordless,
+                     "admin": False}, self._cookie(s.token)
 
     def _remote_ask(self, s: RemoteSession, method: str, path: str, query: dict, body: dict | None):
         """What a remote user asks, asked of their own login with its session; when it has ended there, it ends here."""
@@ -491,7 +498,9 @@ class LoginApp(App):
             self._end(s.token)
             return 401, {"error": f"your session at {s.remote} has ended: sign in again"}, self._cookie(None)
         if path == "/api/me" and status == 200:
-            data = {**data, "name": s.user.name, "remote": s.remote, "passwordless": s.passwordless or bool(data.get("passwordless"))}
+            # whatever they are at their own login, they are not this one's admin (0.17.0)
+            data = {**data, "name": s.user.name, "remote": s.remote, "admin": False,
+                    "passwordless": s.passwordless or bool(data.get("passwordless"))}
         return status, data
 
     def _secret_password_kept(self, s) -> bool:
@@ -502,39 +511,49 @@ class LoginApp(App):
             return True
         if isinstance(s, RemoteSession):
             return False
+        return s.user.name.lower() in {n.lower() for n in self.users.passwordless_kept()}
+
+    def is_admin(self, s) -> bool:
+        """Whether a session is the login's admin: its secret user, signed in here (0.17.0; the user, 2026-11-15: "let
+        the secret user be the admin"). A user of another login is never this login's admin."""
+        if s is None or isinstance(s, RemoteSession):
+            return False
         kept = self.users.secret_kept()
         return kept is not None and kept[0].lower() == s.user.name.lower()
 
     def _secret_sign_in(self, body: dict):
-        """The secret user in without a password: a local login only. The name typed is checked against the one the
-        database keeps (`secret` before it is made); the user is made the first time, its password a random one kept in
-        the database; refused when a user of that name has a password of their own. Any other name: 400 (the page goes
-        on to its password). name@their.domain: their login's own secret user, asked there."""
+        """A user in without a password: a local login only. The name typed is the secret user's as the database keeps
+        it (`secret` before it is made), or `default`, or another name the database keeps a password for (0.17.0); the
+        user is made the first time, its password a random one kept in the database; refused when a user of that name
+        has a password of their own. Any other name: 400 (the page goes on to its password). name@their.domain: their
+        login's own, asked there."""
         remote = self.remote_of(body.get("name"))
         if remote is not None:
             return self._remote_sign_in(*remote, body, "/api/sign-in/secret")
         if self.scope.kind == "domain":
             raise Refused(HTTPStatus.FORBIDDEN, "the secret user is only for a local login: sign in with your password")
-        typed = str(body.get("name") or "").strip()
-        if not typed or typed.lower() != self.users.secret_name().lower():
-            raise Refused(HTTPStatus.BAD_REQUEST, "only the secret user comes in without a password: sign in with yours")
-        with self._secret_lock:
-            made = self.users.secret_kept() is None
+        typed = str(body.get("name") or "").strip().lower()
+        secret = typed == self.users.secret_name().lower()
+        if not typed or not (secret or typed == DEFAULT_NAME or typed in {n.lower() for n in self.users.passwordless_kept()}):
+            raise Refused(HTTPStatus.BAD_REQUEST, NOT_PASSWORDLESS)
+        which = "secret" if secret else typed
+        with self._secret_lock:  # made once, however many ask for it at the same moment
+            made = (self.users.secret_kept() is None) if secret else typed not in {n.lower() for n in self.users.passwordless_kept()}
             try:
-                name, password = self.users.make_secret(LEGACY_SECRET_PASSWORDS)
+                name, password = self.users.make_secret(LEGACY_SECRET_PASSWORDS) if secret else self.users.make_passwordless(typed)
             except ValueError:
                 time.sleep(self.failure_delay)
                 raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password") from None
         if made:
-            self.log("login: the secret user was made (no password: its own is kept in the login's database)")
+            self.log(f"login: the {which} user was made (no password: its own is kept in the login's database)")
         user = self.users.verify(name, password)
         if user is None:  # its row changed outside the login: its kept password no longer opens it
             time.sleep(self.failure_delay)
             raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password")
         s = self._open(user)
         s.passwordless = True
-        self.log(f"login: {user.name} signed in (the secret user, no password)")
-        return 200, {"token": s.token, "user": user.as_dict(), "passwordless": True}, self._cookie(s.token)
+        self.log(f"login: {user.name} signed in (the {which} user, no password)")
+        return 200, {"token": s.token, "user": user.as_dict(), "passwordless": True, "admin": self.is_admin(s)}, self._cookie(s.token)
 
     # -- the routes ------------------------------------------------------------------------------
     def api(self, handler, method: str, path: str, query: dict, body: dict | None):
@@ -552,7 +571,7 @@ class LoginApp(App):
         if path == "/api/status" and method == "GET":
             s = self.session(handler)
             return 200, {"users": self.users.count(), "signedIn": s is not None, "name": s.user.name if s else None,
-                         "remote": s.remote if isinstance(s, RemoteSession) else None,
+                         "remote": s.remote if isinstance(s, RemoteSession) else None, "admin": self.is_admin(s),
                          "for": self.namespace, "forTitle": self.title_for,
                          "superclass": self.superclass.describe() if self.superclass is not None else None,
                          "scope": self.scope.describe(),
@@ -769,4 +788,5 @@ class LoginApp(App):
                 "store": {"file": str(s.vault.path), "pairs": s.vault.count(), "vaultFingerprint": s.vault.fingerprint,
                           "unlockFingerprint": u.unlock_fingerprint, "kdf": u.kdf, "salt": u.salt.hex(),
                           "usersFile": str(self.users.path)},
-                "session": {"minutes": self.session_seconds / 60}, "passwordless": s.passwordless}
+                "session": {"minutes": self.session_seconds / 60}, "passwordless": s.passwordless,
+                "admin": self.is_admin(s)}

@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 SECRET_NAME = "secret"  # the secret user's name the first time; after that, the value kept in settings
 SECRET_KEYS = ("secret_user", "secret_password")
+# A second user in without a password (0.17.0; the user, 2026-11-15: "create a second 'default' user with no login, to
+# test multiple logins and see if the code holds"): made the first time its name is typed, like the secret user, its
+# random password kept under PASSWORDLESS + its name. Any name kept so comes in without a password; only this one is
+# made when asked for. It is an ordinary user: the secret user alone is the login's admin.
+DEFAULT_NAME = "default"
+PASSWORDLESS = "passwordless:"
 ADDED_COLUMNS = (("email", "TEXT COLLATE NOCASE"), ("verified_at", "TEXT"))  # 0.2.0, on a 0.1.0 file
 
 
@@ -318,6 +324,42 @@ class UserStore:
         self.set_setting(SECRET_KEYS[0], name)
         self.set_setting(SECRET_KEYS[1], password)
         return name, password
+
+    def passwordless_kept(self) -> dict[str, str]:
+        """Every user that comes in without a password, as this file keeps them: {name: the password kept for it}; the
+        secret user first (0.17.0)."""
+        out: dict[str, str] = {}
+        kept = self.secret_kept()
+        if kept:
+            out[kept[0]] = kept[1]
+        with self._lock:  # the name as its user's row has it (the key is lowercased); the key's own when the row is gone
+            rows = self._con.execute(
+                "SELECT s.key AS key, s.value AS value, u.name AS name FROM settings s "
+                "LEFT JOIN users u ON u.name = substr(s.key, ?) WHERE s.key LIKE ? ORDER BY s.key",
+                (len(PASSWORDLESS) + 1, PASSWORDLESS + "%")).fetchall()
+        taken = {n.lower() for n in out}
+        for row in rows:
+            name = row["name"] or row["key"][len(PASSWORDLESS):]
+            if name and row["value"] and name.lower() not in taken:
+                out[name] = row["value"]
+                taken.add(name.lower())
+        return out
+
+    def make_passwordless(self, name: str = DEFAULT_NAME) -> tuple[str, str]:
+        """A user in without a password, made as the secret user is: `name` created with a random password kept here
+        (in the clear, like the secret user's: keep nothing of value in its store). Made already: what is kept. A user
+        of that name with a password of their own: ValueError, nothing kept."""
+        import secrets as _secrets
+
+        kept = next(((n, p) for n, p in self.passwordless_kept().items() if n.lower() == name.lower()), None)
+        if kept:
+            return kept
+        if self.exists(name):
+            raise ValueError(f"there is a user named {name!r} with a password of their own")
+        password = _secrets.token_urlsafe(24)
+        made = self.create(name, password)
+        self.set_setting(PASSWORDLESS + made.name.lower(), password)
+        return made.name, password
 
     # -- the sign-ups: an email, its code, then the name and the password --------------------------
     def start_signup(self, email, minutes: float = CODE_MINUTES) -> str:
