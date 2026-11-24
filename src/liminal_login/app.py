@@ -45,7 +45,7 @@ from liminal_libs.mail import MailError, Mailer, mask, mx_records
 from liminal_libs.web import WRITE_HEADER
 from . import __version__
 from .users import CODE_MINUTES, DEFAULT_NAME, User, UserStore
-from .vault import PAIR_NAME, KeyPairStore, store_file
+from .vault import PAIR_NAME, KeyPairStore, VaultClosed, store_file
 
 DIR_VAR = "LIMINAL_LOGIN_DIR"  # the login's folder (store/data/login by default): its own users, a superclass's folder each
 FOR_VAR = SUPER_VAR  # LIMINAL_LOGIN_FOR: the app that inherits this login, when one does (its superclass)
@@ -584,6 +584,12 @@ class LoginApp(App):
 
     # -- the routes ------------------------------------------------------------------------------
     def api(self, handler, method: str, path: str, query: dict, body: dict | None):
+        try:
+            return self._api(handler, method, path, query, body)
+        except VaultClosed:  # signed out (or the session ended) while this request was using the store (0.17.2)
+            raise Refused(HTTPStatus.UNAUTHORIZED, "signed out while this was being asked: sign in again") from None
+
+    def _api(self, handler, method: str, path: str, query: dict, body: dict | None):
         body = body or {}
         if path == "/api/me/password" and method == "PUT":
             # a secret user's password is never changed (0.16.1; 0.15.1 let a new one replace the key the login keeps):

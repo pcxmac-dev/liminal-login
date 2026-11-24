@@ -41,11 +41,21 @@ def clean_pair_name(name) -> str:
     return name
 
 
-def clean_value(value) -> str:
-    value = str(value if value is not None else "").strip()
-    if not value or len(value) > VALUE_MAX or CONTROL.search(value):
-        raise ValueError(f"a value is 1 to {VALUE_MAX} characters, no control characters")
+def clean_value(value, kind: str = "key") -> str:
+    """A value as it is kept. A password exactly as given (0.17.2): it may begin or end with a space, and a vault
+    that trimmed it would hand back another password than the one the service knows. A key, an account's name or
+    a detail without the spaces at its ends, as before (a key pasted with a space after it). One of nothing but
+    spaces is refused."""
+    value = str(value if value is not None else "")
+    if kind != "password":
+        value = value.strip()
+    if not value.strip() or len(value) > VALUE_MAX or CONTROL.search(value):
+        raise ValueError(f"a value is 1 to {VALUE_MAX} characters, not only spaces, no control characters")
     return value
+
+
+class VaultClosed(RuntimeError):
+    """The store was closed (its user signed out, or the session ended) while a request was still using it."""
 
 
 def clean_kind(kind) -> str:
@@ -77,57 +87,78 @@ class KeyPairStore:
             self._con.executescript(SCHEMA)
 
     def close(self) -> None:
+        """Closed and its key forgotten, once whatever is being read or written has finished (every use holds the
+        lock from its query to its decryption: 0.17.2). What asks after this is told so (VaultClosed)."""
         with self._lock:
+            if self._key is None:
+                return
             self._con.close()
-        self._key = b""
+            self._key = None
+
+    def _open(self) -> None:
+        """(under the lock) Refuses a store that is closed."""
+        if self._key is None:
+            raise VaultClosed("this store was closed (signed out) while it was being asked")
 
     @property
     def fingerprint(self) -> str:
-        return crypto.fingerprint(self._key)
+        with self._lock:
+            self._open()
+            return crypto.fingerprint(self._key)
 
     def count(self) -> int:
         with self._lock:
+            self._open()
             return self._con.execute("SELECT COUNT(*) FROM pairs").fetchone()[0]
 
     def names(self) -> list[dict]:
         """Every pair by name: its kind, label and dates, never its value."""
         with self._lock:
+            self._open()
             rows = self._con.execute("SELECT name, kind, label, created_at, updated_at FROM pairs ORDER BY name").fetchall()
         return [{"name": r["name"], "kind": r["kind"], "label": r["label"], "createdAt": r["created_at"],
                  "updatedAt": r["updated_at"]} for r in rows]
 
     def info(self, name: str) -> dict | None:
         with self._lock:
-            r = self._con.execute("SELECT name, kind, label, created_at, updated_at FROM pairs WHERE name = ?",
-                                  (clean_pair_name(name),)).fetchone()
+            self._open()
+            return self._info(name)
+
+    def _info(self, name: str) -> dict | None:
+        r = self._con.execute("SELECT name, kind, label, created_at, updated_at FROM pairs WHERE name = ?",
+                             (clean_pair_name(name),)).fetchone()
         return None if r is None else {"name": r["name"], "kind": r["kind"], "label": r["label"],
                                        "createdAt": r["created_at"], "updatedAt": r["updated_at"]}
 
     def get(self, name: str) -> str:
         """The pair's value (the vector); KeyError when there is no such pair."""
         name = clean_pair_name(name)
-        with self._lock:
+        with self._lock:  # to the decryption: a close waits for it, and never clears the key under it
+            self._open()
             r = self._con.execute("SELECT nonce, sealed FROM pairs WHERE name = ?", (name,)).fetchone()
-        if r is None:
-            raise KeyError(name)
-        return crypto.unseal(self._key, r["nonce"], r["sealed"], name.encode("utf-8")).decode("utf-8")
+            if r is None:
+                raise KeyError(name)
+            return crypto.unseal(self._key, r["nonce"], r["sealed"], name.encode("utf-8")).decode("utf-8")
 
     def put(self, name: str, value: str, kind: str = "key", label: str = "") -> dict:
         """Keep a pair (a new one, or the value of one there already); the row's dates and kind."""
-        name, value, kind = clean_pair_name(name), clean_value(value), clean_kind(kind)
+        name, kind = clean_pair_name(name), clean_kind(kind)
+        value = clean_value(value, kind)
         label = str(label or "").strip()[:80]
-        nonce, sealed = crypto.seal(self._key, value.encode("utf-8"), name.encode("utf-8"))
         now = now_iso()
         with self._lock:
+            self._open()
+            nonce, sealed = crypto.seal(self._key, value.encode("utf-8"), name.encode("utf-8"))
             self._con.execute("INSERT INTO pairs (name, kind, label, nonce, sealed, created_at, updated_at) "
                               "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET kind = excluded.kind, "
                               "label = excluded.label, nonce = excluded.nonce, sealed = excluded.sealed, "
                               "updated_at = excluded.updated_at", (name, kind, label, nonce, sealed, now, now))
             self._con.commit()
-        return self.info(name)
+            return self._info(name)
 
     def remove(self, name: str) -> bool:
         with self._lock:
+            self._open()
             n = self._con.execute("DELETE FROM pairs WHERE name = ?", (clean_pair_name(name),)).rowcount
             self._con.commit()
         return n > 0

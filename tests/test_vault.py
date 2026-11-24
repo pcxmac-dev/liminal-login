@@ -75,3 +75,46 @@ def test_a_users_store_file_is_named_safely_and_uniquely(tmp_path):
     assert a.parent == tmp_path and a.name.startswith("ada_lovelace-") and a.suffix == ".db" and a != b
     assert store_file(tmp_path, "../../etc") .parent == tmp_path and "/" not in store_file(tmp_path, "../../etc").name
     assert store_file(tmp_path, "日本語").name.startswith("user-")
+
+
+def test_a_password_is_kept_exactly_spaces_at_its_ends_too(folder):
+    """The review of 2026-11-21 (item 26): every value was trimmed before it was sealed, a password's spaces too."""
+    store = KeyPairStore(folder / "users" / "ada.db", crypto.new_key())
+    store.put("service-account-password", " demo password ", "password")
+    assert store.get("service-account-password") == " demo password "
+    store.put("service-api-key", " sk-0001 ", "key")  # a key pasted with spaces about it: without them, as before
+    assert store.get("service-api-key") == "sk-0001"
+    with pytest.raises(ValueError, match="not only spaces"):
+        store.put("service-account-password", "   ", "password")
+    store.close()
+
+
+def test_a_close_waits_for_a_read_under_way_and_what_asks_after_it_is_told_so(folder, monkeypatch):
+    """The review of 2026-11-21 (item 26): a sign-out closed the store, and cleared its key, between a read's query
+    and its decryption. The close is asked for at that very moment (inside the decryption)."""
+    import threading
+
+    from liminal_login import vault as vault_module
+    from liminal_login.vault import VaultClosed
+
+    store = KeyPairStore(folder / "users" / "ada.db", crypto.new_key())
+    store.put("massive-api-key", "the-key")
+    real, closer = crypto.unseal, []
+
+    def unseal(key, nonce, sealed, aad):
+        t = threading.Thread(target=store.close)
+        closer.append(t)
+        t.start()
+        t.join(0.3)
+        assert t.is_alive()  # the close waits for this read
+        return real(key, nonce, sealed, aad)
+
+    monkeypatch.setattr(vault_module.crypto, "unseal", unseal)
+    assert store.get("massive-api-key") == "the-key"
+    closer[0].join(5)
+    assert not closer[0].is_alive()
+    for ask in (lambda: store.get("massive-api-key"), lambda: store.put("x", "y"), store.names, store.count,
+                lambda: store.info("x"), lambda: store.remove("x"), lambda: store.fingerprint):
+        with pytest.raises(VaultClosed):
+            ask()
+    store.close()  # a second close: nothing

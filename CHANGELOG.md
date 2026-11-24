@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.17.2 (2026-11-24)
+
+The review of 2026-11-21 on your desktop (Monday list item 26), checked against the checkout:
+- A password is kept exactly as given. Every value was trimmed before it was sealed, so a password beginning or
+  ending with a space came back as another one. Keys, accounts' names and details are still trimmed (a key
+  pasted with a space after it). A value of nothing but spaces is refused.
+- Signing out no longer closes a store under a request using it. A request takes its session and then uses its
+  store after the sessions' lock is let go, and a read decrypted with the key outside the store's lock, so a
+  sign-out on another thread could close the connection or clear the key under it. Every use of the store now
+  holds its lock from the query to the decryption, a close waits for it, and what asks after the close is
+  answered 401 "signed out while this was being asked: sign in again" (`VaultClosed`).
+
 ## 0.17.1 (2026-11-15)
 
 Two suites on one machine no longer sign each other out (the user: "i need to run the same suite in a WSL container";

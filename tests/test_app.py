@@ -540,3 +540,17 @@ def test_a_user_of_another_login_signs_in_there_and_everything_they_ask_is_made_
         LoginApp(folder / "plain", log=lambda m: None, remotes={"remote.tld": "http://remote.tld"})
     page = (LoginApp.STATIC / "login.js").read_text(encoding="utf-8")
     assert "${me.remote ? `<dt>Kept at</dt>" in page and "A user of another login signs in as name@their.domain" in page
+
+
+def test_a_request_whose_session_is_signed_out_under_it_is_told_to_sign_in_again(served):
+    """The review of 2026-11-21 (item 26): a request holds its session after the sessions' lock is let go, and a
+    sign-out meanwhile closed the store under it (a closed connection, an error of the server's). Now it is told
+    plainly, and nothing of the store is read after it was closed."""
+    app, port, _lines = served
+    assert _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})[0] == 201
+    token = _call(port, "POST", "/api/sign-in", {"name": "ada", "password": "correct horse battery"})[1]["token"]
+    assert _call(port, "PUT", "/api/pairs/massive-api-key", {"value": " a pass word ", "kind": "password"}, token=token)[0] == 200
+    assert _call(port, "GET", "/api/pairs/massive-api-key", token=token)[1]["value"] == " a pass word "
+    app._sessions[token].vault.close()  # what a sign-out on another thread does, after this request took its session
+    status, data, _ = _call(port, "GET", "/api/pairs/massive-api-key", token=token)
+    assert status == 401 and "signed out while this was being asked" in data["error"]
