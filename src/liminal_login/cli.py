@@ -20,7 +20,7 @@ from liminal_libs import layout, secrets, web
 from liminal_libs.docker import DockerError, command_line
 from liminal_libs.mailbox import Mailbox
 from liminal_libs.apps import FILE_NAME, Scope
-from liminal_libs.config import save_user_variable
+from liminal_libs.config import ConfigError, save_user_variable
 from liminal_libs.logs import Logger
 from liminal_libs.mail import FROM_VAR, HOST_VAR, PASSWORD_VAR, PORT_VAR, SECURITY_VAR, USER_VAR, MailError, Mailer, MailSettings
 
@@ -174,26 +174,36 @@ def mail_setup(args, ask=None, hidden=None) -> int:
         box_user = ask(f"Mailbox user [{scope.imap.get('user') or scope.admin_address}]: ").strip() or scope.imap.get("user") or scope.admin_address
         mailbox = {"host": box_host, "port": box_port, "security": "ssl" if box_port == "993" else "starttls", "user": box_user}
         mailbox_password = hidden("Mailbox password (typed hidden; empty: the sending password, or the one kept): ")
-    if scope is not None and scope.path is not None:  # the login's own file holds its mail server
-        from dataclasses import replace
+    # The passwords go first, then the settings: off Windows there is no secret store (OSError) and no user variables
+    # (ConfigError), and the review of 2026-11-21 (item 26) found the command crashing there with a traceback, the
+    # login's file already rewritten. Now it says why and ends with 1; the first write that fails stops it, before the
+    # settings when a password is to be kept.
+    try:
+        if password:
+            secrets.put(PASSWORD_VAR, password)
+        if scope is not None and scope.path is not None:  # the login's own file holds its mail server
+            from dataclasses import replace
 
-        mail = {**scope.mail, "host": host, "port": str(port), "security": security, "user": user, "from": sender}
-        scope = replace(scope, mail={k: v for k, v in mail.items() if v}, imap=mailbox or scope.imap)
-        scope.write(scope.path)
-        print(f"kept in {scope.path} under [mail]" + (" and [imap]" if mailbox else ""))
-        if mailbox and (mailbox_password or password):
-            secrets.put("LIMINAL_IMAP_PASSWORD", mailbox_password or password)
-    else:
-        save_user_variable(HOST_VAR, host)
-        save_user_variable(PORT_VAR, str(port))
-        save_user_variable(SECURITY_VAR, security)
-        save_user_variable(USER_VAR, user or None)
-        save_user_variable(FROM_VAR, sender or None)
-    if password:
-        secrets.put(PASSWORD_VAR, password)
-        save_user_variable(PASSWORD_VAR, None)  # never in the registry in the clear
-    elif not user:
-        secrets.remove(PASSWORD_VAR)
+            if mailbox and (mailbox_password or password):
+                secrets.put("LIMINAL_IMAP_PASSWORD", mailbox_password or password)
+            mail = {**scope.mail, "host": host, "port": str(port), "security": security, "user": user, "from": sender}
+            scope = replace(scope, mail={k: v for k, v in mail.items() if v}, imap=mailbox or scope.imap)
+            scope.write(scope.path)
+            print(f"kept in {scope.path} under [mail]" + (" and [imap]" if mailbox else ""))
+        else:
+            save_user_variable(HOST_VAR, host)
+            save_user_variable(PORT_VAR, str(port))
+            save_user_variable(SECURITY_VAR, security)
+            save_user_variable(USER_VAR, user or None)
+            save_user_variable(FROM_VAR, sender or None)
+        if password:
+            save_user_variable(PASSWORD_VAR, None)  # never in the registry in the clear
+        elif not user:
+            secrets.remove(PASSWORD_VAR)
+    except (OSError, ConfigError) as e:
+        print(f"the mail account was not kept: {e}. Off Windows, set the LIMINAL_SMTP_* variables in the environment "
+              "the login runs in, or name the server in its file (liminal-login.cfg's [mail]).", file=sys.stderr)
+        return 1
     s = MailSettings.from_env(cfg=scope.mail_variables() if scope is not None else None)
     d = s.describe()
     print(f"kept: {d['host']}:{d['port']} {d['security']}, user {d['user'] or '(none)'}, from {d['sender'] or '(none)'}, "

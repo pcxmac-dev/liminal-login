@@ -573,3 +573,85 @@ def test_a_name_with_an_at_is_never_a_local_users_and_never_sends_a_password_awa
     assert status == 200 and data["user"]["name"] == "old@gmail.com" and sent == []
     status, _data, _ = _call(port, "POST", "/api/sign-in", {"name": "old@gmail.com", "password": "a wrong one"})
     assert status == 401 and sent == []  # refused here: the password never leaves
+
+
+def _stand_in_remote(app, monkeypatch, gate=None):
+    """A remote login as _remote_call sees it: every sign-in gives a token of its own, every sign-out is kept (and,
+    with `gate`, waits for it: a remote login that does not answer yet)."""
+    import threading
+
+    signed_out: list = []
+    told = threading.Event()
+    given = iter(range(1, 100))
+
+    def call(base, method, path, body=None, token=None, query=None):
+        if path == "/api/sign-in":
+            return 200, {"token": f"theirs-{next(given)}", "user": {"name": body["name"]}}
+        if path == "/api/sign-out":
+            if gate is not None:
+                gate.wait(5)
+            signed_out.append((base, token))
+            told.set()
+            return 200, {"signedOut": True}
+        return 404, {"error": "no"}
+
+    monkeypatch.setattr(app, "_remote_call", call)
+    return signed_out, told
+
+
+def test_a_remote_users_session_ended_here_is_signed_out_at_their_own_login(served, monkeypatch):
+    """The review of 2026-11-21, item 26: a remote user's session that idled out here, or was left when the login
+    stopped, was dropped here alone and stayed signed in at their own login. Now it is signed out there too, on a
+    thread of its own: the request that ended it does not wait for the other login."""
+    import threading
+
+    app, port, lines = served
+    gate = threading.Event()
+    signed_out, told = _stand_in_remote(app, monkeypatch, gate)
+    monkeypatch.setenv("LIMINAL_LOGIN_SESSION_MINUTES", "1")
+    status, data, _ = _call(port, "POST", "/api/sign-in", {"name": "ada@remote.test", "password": "correct horse battery"})
+    assert status == 200 and data["user"]["name"] == "ada@remote.test"
+    with app._lock:
+        app._sessions[data["token"]].last = time.monotonic() - 120
+    # another sign-in ends it (idle); the other login has not answered yet, and this request is answered all the same
+    assert _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 200
+    assert data["token"] not in app._sessions and signed_out == []
+    gate.set()
+    assert told.wait(5) and signed_out == [("https://remote.test", "theirs-1")]
+    # the login stopping: every remote session signed out there
+    told.clear()
+    second = _call(port, "POST", "/api/sign-in", {"name": "bo@remote.test", "password": "correct horse battery"})[1]["token"]
+    assert second in app._sessions
+    app.stop()
+    assert told.is_set() and signed_out[-1] == ("https://remote.test", "theirs-2")
+
+
+def test_a_password_changed_ends_the_users_other_sessions(served):
+    """The review of 2026-11-21, item 26: a password change left the user's other sessions signed in, one taken with
+    the old password among them. Now they are ended and their stores closed; the session that changed it stays, and
+    another user's are untouched."""
+    app, port, lines = served
+    assert _call(port, "POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})[0] == 201
+    here = _call(port, "POST", "/api/sign-in", {"name": "ada", "password": "correct horse battery"})[1]["token"]
+    there = _call(port, "POST", "/api/sign-in", {"name": "Ada", "password": "correct horse battery"})[1]["token"]
+    other = _call(port, "POST", "/api/sign-in/secret", {"name": "default"})[1]["token"]
+    left = app._sessions[there]
+    status, data, _ = _call(port, "PUT", "/api/me/password", {"old": "correct horse battery", "new": "a brand new password"}, token=here)
+    assert status == 200 and data["otherSessionsEnded"] == 1
+    assert _call(port, "GET", "/api/me", token=there)[0] == 401 and left.vault._key is None
+    assert _call(port, "GET", "/api/me", token=here)[1]["name"] == "Ada"
+    assert _call(port, "GET", "/api/me", token=other)[1]["name"] == "default"
+    assert any("Ada's session ended (the password changed)" in m for m in lines)
+
+
+def test_a_name_that_names_no_login_is_a_400_with_the_reason(served, monkeypatch):
+    """The review of 2026-11-21, item 26: a name like a@[ made the address of a login that cannot be one, and the
+    ValueError came back as a 500."""
+    app, port, _lines = served
+    asked: list = []
+    monkeypatch.setattr(app, "_remote_call", lambda *a, **k: asked.append(a) or (500, {}))
+    for path, body in (("/api/sign-in", {"name": "a@[", "password": "correct horse battery"}),
+                       ("/api/sign-in/secret", {"name": "a@["})):
+        status, data, _ = _call(port, "POST", path, body)
+        assert status == 400 and "a@[ names no login that can be asked" in data["error"], (path, status, data)
+    assert asked == []

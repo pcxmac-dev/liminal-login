@@ -76,6 +76,22 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _refuse_again(row, sooner_than: float) -> None:
+    """Whether a sign-up under way may be begun again or given a new code (the review of 2026-11-21, item 26): anyone
+    could begin one again at once, with no time check, so the limit on new codes was nothing, a stranger could send
+    codes to an address as fast as they liked, and a sign-up already verified (its name and password being chosen) was
+    wiped, its proof made worthless. Now one that has expired may always begin again; one verified never, until it
+    expires; and a new code waits `sooner_than` seconds after the last. ValueError says which."""
+    now = datetime.now(timezone.utc)
+    if datetime.fromisoformat(row["expires_at"]) < now:
+        return
+    if row["verified_at"] is not None:
+        raise ValueError("that address was verified already and its account is being made: finish that, "
+                         "or ask again once it has expired")
+    if (now - datetime.fromisoformat(row["sent_at"])).total_seconds() < sooner_than:
+        raise ValueError(f"a code went out less than {int(sooner_than)} seconds ago: look for it, then ask again")
+
+
 def _at(minutes: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(timespec="seconds")
 
@@ -416,15 +432,20 @@ class UserStore:
         return name, password
 
     # -- the sign-ups: an email, its code, then the name and the password --------------------------
-    def start_signup(self, email, minutes: float = CODE_MINUTES) -> str:
+    def start_signup(self, email, minutes: float = CODE_MINUTES, sooner_than: float = RESEND_SECONDS) -> str:
         """A sign-up begun with an email: the code to mail (kept as a salted hash alone). An address
-        that is a user's already is refused; a sign-up begun again replaces the one under way."""
+        that is a user's already is refused; a sign-up begun again replaces the one under way only as a
+        new code would (_refuse_again: not sooner than `sooner_than` seconds after the last, never one
+        verified until it expires), else ValueError and nothing is changed or sent."""
         email = clean_email(email)
         code = crypto.new_code()
         code_salt = crypto.new_salt()
         now = now_iso()
         with self._lock:
             self._refuse_taken(None, email)
+            r = self._con.execute("SELECT sent_at, expires_at, verified_at FROM signups WHERE email = ?", (email,)).fetchone()
+            if r is not None:
+                _refuse_again(r, sooner_than)
             self._con.execute("INSERT OR REPLACE INTO signups (email, code_salt, code_hash, tries, sent_at, expires_at, created_at) "
                               "VALUES (?, ?, ?, 0, ?, ?, ?)", (email, code_salt, crypto.code_hash(code, code_salt), now, _at(minutes), now))
             self._con.commit()
@@ -455,15 +476,14 @@ class UserStore:
 
     def resend_signup(self, email, minutes: float = CODE_MINUTES, sooner_than: float = RESEND_SECONDS) -> str:
         """A new code for the sign-up under way (the old one no longer counts); ValueError when none
-        is under way or the last went out less than `sooner_than` seconds ago."""
+        is under way, the last went out less than `sooner_than` seconds ago, or it was verified and has
+        not expired (_refuse_again)."""
         email = clean_email(email)
         with self._lock:
-            r = self._con.execute("SELECT sent_at FROM signups WHERE email = ?", (email,)).fetchone()
+            r = self._con.execute("SELECT sent_at, expires_at, verified_at FROM signups WHERE email = ?", (email,)).fetchone()
             if r is None:
                 raise ValueError("no sign-up is under way for that address: start one first")
-            sent = datetime.fromisoformat(r["sent_at"])
-            if (datetime.now(timezone.utc) - sent).total_seconds() < sooner_than:
-                raise ValueError(f"a code went out less than {int(sooner_than)} seconds ago: look for it, then ask again")
+            _refuse_again(r, sooner_than)
             code = crypto.new_code()
             code_salt = crypto.new_salt()
             self._con.execute("UPDATE signups SET code_salt = ?, code_hash = ?, tries = 0, sent_at = ?, expires_at = ?, "

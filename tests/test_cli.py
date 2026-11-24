@@ -302,3 +302,37 @@ def test_serve_runs_the_app_at_the_port_asked(folder, monkeypatch):
     assert cli.main(["serve", "--no-browser", "--until-quiet"]) == 0 and ran[-1][3] == 600.0
     monkeypatch.setenv("LIMINAL_QUIET_SECONDS", "30")
     assert cli.main(["serve", "--no-browser", "--until-quiet"]) == 0 and ran[-1][3] == 30.0
+
+
+def test_mail_setup_off_windows_says_why_and_keeps_nothing_half_written(monkeypatch, capsys):
+    """The review of 2026-11-21, item 26: off Windows `mail setup` crashed with a traceback, there being no secret
+    store (OSError) and no user variables (ConfigError), after the settings were already written. Now it says why and
+    ends with 1, the password tried first so nothing else is written when it cannot be kept."""
+    from liminal_libs import mail
+    from liminal_libs.config import ConfigError
+
+    saved: dict = {}
+    for v in mail.ALL_VARS:
+        monkeypatch.delenv(v, raising=False)
+
+    def no_variables(name, value):
+        raise ConfigError("saving a user environment variable needs Windows")
+
+    def no_store(name, value):
+        raise OSError("no secret store on this machine (Windows' Credential Manager is the one supported): "
+                      f"set {name} as an environment variable instead")
+
+    monkeypatch.setattr(cli.secrets, "put", no_store)
+    monkeypatch.setattr(cli.secrets, "remove", lambda name: False)
+    monkeypatch.setattr(cli, "save_user_variable", lambda name, value: saved.__setitem__(name, value))
+    answers = iter(["bridge", "", "", "me@proton.me", "Me <me@proton.me>"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt="": "bridge-pw-1")
+    assert cli.main(["mail", "setup"]) == 1
+    err = capsys.readouterr().err
+    assert "the mail account was not kept: no secret store on this machine" in err and saved == {}
+    # no password to keep (direct): the user variables are what is missing, said the same way
+    monkeypatch.setattr(cli, "save_user_variable", no_variables)
+    answers = iter(["direct", "me@proton.me"])
+    assert cli.main(["mail", "setup"]) == 1
+    assert "the mail account was not kept: saving a user environment variable needs Windows" in capsys.readouterr().err

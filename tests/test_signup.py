@@ -277,3 +277,43 @@ def test_a_domains_login_says_how_its_codes_go_out(served_mail):
     assert st["signup"]["local"] is False and st["signup"]["email"] is True
     assert st["signup"]["host"] == "smtp.example.test" and st["signup"]["sender"] == "liminal@example.test"
     assert app.mail_words() == "passkeys through smtp.example.test"
+
+
+def test_a_signup_is_begun_again_only_as_a_new_code_would_be_never_over_a_verified_one(folder):
+    """The review of 2026-11-21, item 26: a sign-up begun again replaced the one under way at once, with no time check,
+    so anyone could send an address codes as fast as they liked and wipe a sign-up already verified, its proof then
+    worth nothing. Now a start is refused as a resend is (not twice in a minute), and never replaces a verified one
+    until it has expired."""
+    users = UserStore(folder / "users.db")
+    first = users.start_signup("ada@example.test")
+    with pytest.raises(ValueError, match="seconds ago"):  # at once: refused, nothing changed
+        users.start_signup("ada@example.test")
+    token = users.verify_signup("ada@example.test", first)  # the first code still counts
+    with pytest.raises(ValueError, match="verified already"):  # however long after the code went out
+        users.start_signup("ada@example.test", sooner_than=0)
+    with pytest.raises(ValueError, match="verified already"):
+        users.resend_signup("ada@example.test", sooner_than=0)
+    assert users.complete_signup("ada@example.test", token, "Ada", "correct horse battery").name == "Ada"  # its proof holds
+    # one verified and left to expire begins again; one not verified, its code older than the limit, gets a new code
+    users.verify_signup("bo@example.test", users.start_signup("bo@example.test"))
+    con = sqlite3.connect(str(folder / "users.db"))
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(timespec="seconds")
+    con.execute("UPDATE signups SET expires_at = ? WHERE email = ?", (past, "bo@example.test"))
+    con.commit()
+    con.close()
+    again = users.start_signup("bo@example.test")
+    assert users.signup("bo@example.test")["verified"] is False and users.verify_signup("bo@example.test", again)
+    users.start_signup("cy@example.test")
+    newer = users.start_signup("cy@example.test", sooner_than=0)
+    assert users.verify_signup("cy@example.test", newer)
+    users.close()
+
+
+def test_a_second_signup_for_an_address_within_the_limit_sends_nothing(served_mail):
+    """The same, through the page: the second start is a 400 and no second message goes out."""
+    app, port, lines, mailer = served_mail
+    assert _call(port, "POST", "/api/signup", {"email": "ada@example.test"})[0] == 202
+    code = mailer.last_code()
+    status, data, _ = _call(port, "POST", "/api/signup", {"email": "ada@example.test"})
+    assert status == 400 and "seconds ago" in data["error"] and len(mailer.sent) == 1
+    assert _call(port, "POST", "/api/signup/verify", {"email": "ada@example.test", "code": code})[0] == 200

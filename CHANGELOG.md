@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.17.5 (2026-11-24)
+
+The review of 2026-11-21 (Monday list item 26), five P3s:
+- A sign-up is no longer begun again at anyone's word. A start replaced the sign-up under way at once, with no time
+  check, so the limit on new codes was nothing and a sign-up already verified (its name and password being chosen)
+  could be wiped. A second start for an address within a minute is now refused without a message sent, and a verified
+  sign-up is never replaced, by a start or a new code, until it has expired; its proof still completes it.
+- A remote user's session ended here is signed out at their own login too. Only a sign-out on the page did that, so
+  a session that idled out here, or was left when the login stopped, stayed signed in there. Now each is signed out
+  there as well, best effort, on a thread of its own (no request waits for another login; a stop waits two seconds).
+- A password changed ends the user's other sessions, their stores closed; the session that changed it stays.
+- A name like `a@[` is a 400 with the reason, not a 500.
+- `liminal-login mail setup` off Windows says why it cannot keep the account (no secret store, no user variables) and
+  ends with 1, instead of a traceback after the settings were written; the password is kept first, so nothing else is
+  written when it cannot be.
+
 ## 0.17.4 (2026-11-24)
 
 The review of 2026-11-21 (Monday list item 26), two P2s:

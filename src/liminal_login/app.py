@@ -53,6 +53,7 @@ NAMESPACE = re.compile(r"^[a-z][a-z0-9-]{1,23}$")  # a superclass's short name
 RESERVED = frozenset({"users", "logs", "dkim"})  # the login's own folders: never a superclass's
 PAIRS_SECONDS = 60.0  # the pairs a superclass's plugins ask for, asked of it again after this long
 REMOTE_SECONDS = 15.0  # how long a remote login has to answer
+SIGN_OUT_WAIT_SECONDS = 2.0  # at a stop: how long the sign-outs of remote users' sessions at their own logins are waited for
 CA_VAR = "LIMINAL_LOGIN_CA"  # a certificate authority (PEM) trusted for remote logins besides the system's: a test front's own
 REMOTE_MAX = 1_000_000  # the most of an answer read from it
 # what a remote user's session asks of their own login (0.15.0): who they are, their password, their pairs; the rest
@@ -193,7 +194,7 @@ class RemoteSession:
     vault = None  # their pairs are theirs, at their login
 
     def close(self) -> None:
-        pass
+        pass  # nothing of theirs is open here; the login signs them out at their own (LoginApp._sign_out_there)
 
 
 class LoginApp(App):
@@ -240,6 +241,7 @@ class LoginApp(App):
                         **{k.lower().strip("."): remote_address(v) for k, v in (remotes or {}).items()}}
         self._remote_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),  # https, its certificate checked
                                                           urllib.request.HTTPSHandler(context=remote_tls()))
+        self._signing_out: list[threading.Thread] = []  # remote users' sessions being signed out at their own logins
 
     @property
     def namespace(self) -> str | None:
@@ -386,15 +388,46 @@ class LoginApp(App):
         store's close waits for a request still using it). The review of 2026-11-21, item 26: a session was ended only
         when its own token came back, so one left without a sign-out kept its store open and its key in memory until
         the process stopped, and every sign-in added one; now each sign-in and each look at a session ends them all,
-        a remote user's too (nothing of theirs is kept here; their own login ends theirs once idle)."""
+        a remote user's too (signed out at their own login as well: _closed)."""
         limit = self.session_seconds
         idle = [t for t, s in self._sessions.items() if now - s.last > limit]
         return [self._sessions.pop(t) for t in idle]
 
-    def _closed(self, gone: list) -> None:
+    def _closed(self, gone: list, why: str = "idle") -> None:
         for s in gone:
             s.close()
-            self.log(f"login: {s.user.name}'s session ended (idle)")
+            self.log(f"login: {s.user.name}'s session ended ({why})")
+            if isinstance(s, RemoteSession):
+                self._sign_out_there(s)
+
+    def _sign_out_there(self, s: RemoteSession) -> threading.Thread:
+        """A remote user's session ended here (idle, or the login stopping) signed out at their own login too. The review
+        of 2026-11-21, item 26: only a sign-out on the page did that, so a session that idled out here, or was left
+        when the login stopped, stayed signed in at their login with its token alive there. Best effort, on a thread of
+        its own: no request here waits on another login; one that does not answer ends it there by itself once idle."""
+
+        def run():
+            try:
+                self._remote_call(s.remote, "POST", "/api/sign-out", {}, s.remote_token)
+            except Exception:  # noqa: BLE001 - Refused (it does not answer), or anything else: best effort
+                self.log(f"login: {s.remote} did not answer the sign-out of {s.user.name}; its session ends there by itself")
+
+        thread = threading.Thread(target=run, name="liminal-login-remote-sign-out", daemon=True)
+        with self._lock:
+            self._signing_out = [t for t in self._signing_out if t.is_alive()] + [thread]
+        thread.start()
+        return thread
+
+    def _end_others(self, s: Session, why: str) -> int:
+        """Every other session of `s`'s user ended and closed, `s` kept (the review of 2026-11-21, item 26: a password
+        changed left every other browser or client signed in with the old one, a session taken with it among them)."""
+        name = s.user.name.lower()
+        with self._lock:
+            others = [t for t, o in self._sessions.items()
+                      if t != s.token and isinstance(o, Session) and o.user.name.lower() == name]
+            gone = [self._sessions.pop(t) for t in others]
+        self._closed(gone, why)
+        return len(gone)
 
     def _require(self, handler) -> Session:
         """The request's session of one of this login's own users (a user of another login is answered by their own:
@@ -427,6 +460,8 @@ class LoginApp(App):
             sessions, self._sessions = list(self._sessions.values()), {}
         for s in sessions:
             s.close()
+            if isinstance(s, RemoteSession):  # and at their own login (the review of 2026-11-21, item 26)
+                self._sign_out_there(s)
 
     def sessions(self) -> list[str]:
         """Who is signed in now (the names), for the command line."""
@@ -436,6 +471,12 @@ class LoginApp(App):
     def stop(self) -> None:
         super().stop()
         self.end_sessions()
+        # the remote users' sign-outs a moment to go out before the process ends: a short wait, never a long one
+        deadline = time.monotonic() + SIGN_OUT_WAIT_SECONDS
+        with self._lock:
+            waiting, self._signing_out = self._signing_out, []
+        for t in waiting:
+            t.join(max(deadline - time.monotonic(), 0))
 
     def close(self) -> None:
         self.stop()
@@ -512,7 +553,10 @@ class LoginApp(App):
     def _remote_sign_in(self, name: str, host: str, body: dict, path: str = "/api/sign-in"):
         """A user of another login signed in there (their password, or their login's secret user), the session it gave
         kept here behind one of this login's own; their answer passed back when it says no."""
-        base = self.remote_url(host)
+        try:
+            base = self.remote_url(host)
+        except ValueError as e:  # a name like a@[ (the review of 2026-11-21, item 26: a 500, the error of the server's)
+            raise Refused(HTTPStatus.BAD_REQUEST, f"{name}@{host} names no login that can be asked: {e}") from None
         payload = {"name": name, **({"password": body.get("password")} if path == "/api/sign-in" else {})}
         status, data = self._remote_call(base, "POST", path, payload)
         if status != 200 or not data.get("token"):
@@ -679,7 +723,8 @@ class LoginApp(App):
             except ValueError as e:
                 raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
             self.log(f"login: {s.user.name} changed their password")
-            return 200, {"changed": True, "unlockFingerprint": s.user.unlock_fingerprint}
+            ended = self._end_others(s, "the password changed")  # signed in elsewhere with the old one: out
+            return 200, {"changed": True, "unlockFingerprint": s.user.unlock_fingerprint, "otherSessionsEnded": ended}
         if path == "/api/pairs" and method == "GET":
             return 200, {"pairs": self._require(handler).vault.names()}
         if path == "/api/pairs/known" and method == "GET":
