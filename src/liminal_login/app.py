@@ -370,22 +370,31 @@ class LoginApp(App):
 
     def session(self, handler) -> Session | None:
         """The request's session, its idle clock reset; None when there is none, or it idled out
-        (closed then)."""
+        (closed then, with every other session idle too long)."""
         token = self._token(handler)
-        if not token:
-            return None
         now = time.monotonic()
         with self._lock:
-            s = self._sessions.get(token)
-            if s is None:
-                return None
-            if now - s.last > self.session_seconds:
-                del self._sessions[token]
-                s.close()
-                self.log(f"login: {s.user.name}'s session ended (idle)")
-                return None
-            s.last = now
-            return s
+            gone = self._sweep(now)
+            s = self._sessions.get(token) if token else None
+            if s is not None:
+                s.last = now
+        self._closed(gone)
+        return s
+
+    def _sweep(self, now: float) -> list:
+        """Under the lock: every session idle too long, taken out (the caller closes them once the lock is let go: a
+        store's close waits for a request still using it). The review of 2026-11-21, item 26: a session was ended only
+        when its own token came back, so one left without a sign-out kept its store open and its key in memory until
+        the process stopped, and every sign-in added one; now each sign-in and each look at a session ends them all,
+        a remote user's too (nothing of theirs is kept here; their own login ends theirs once idle)."""
+        limit = self.session_seconds
+        idle = [t for t, s in self._sessions.items() if now - s.last > limit]
+        return [self._sessions.pop(t) for t in idle]
+
+    def _closed(self, gone: list) -> None:
+        for s in gone:
+            s.close()
+            self.log(f"login: {s.user.name}'s session ended (idle)")
 
     def _require(self, handler) -> Session:
         """The request's session of one of this login's own users (a user of another login is answered by their own:
@@ -401,7 +410,9 @@ class LoginApp(App):
         vault = KeyPairStore(store_file(self.dir / "users", user.name), user.vault_key)
         s = Session(secrets.token_urlsafe(32), user, vault, time.monotonic())
         with self._lock:
+            gone = self._sweep(s.last)
             self._sessions[s.token] = s
+        self._closed(gone)
         return s
 
     def _end(self, token: str | None) -> Session | None:
@@ -512,7 +523,9 @@ class LoginApp(App):
         s = RemoteSession(secrets.token_urlsafe(32), RemoteUser(who), base, str(data["token"]), time.monotonic(),
                           bool(data.get("passwordless")))
         with self._lock:
+            gone = self._sweep(s.last)
             self._sessions[s.token] = s
+        self._closed(gone)
         self.log(f"login: {who} signed in at {base}")
         # their own login's admin, perhaps: never this one's (0.17.0)
         return 200, {"token": s.token, "user": {"name": who, "remote": base}, "passwordless": s.passwordless,

@@ -259,16 +259,27 @@ class UserStore:
         user = self.verify(name, old)
         if user is None:
             raise ValueError("the current password is wrong")
+        moved = self._rewrapped(user, new)
+        with self._lock:
+            self._rewrap(moved)
+            self._con.commit()
+        return moved
+
+    @staticmethod
+    def _rewrapped(user: User, new) -> User:
+        """The user under a new password: a new salt and unlock key, the same vault key wrapped again (nothing written)."""
         new = check_password(new)
         salt = crypto.new_salt()
         kdf = dict(crypto.KDF)
         unlock = crypto.derive(new, salt, kdf)
-        nonce, wrapped = crypto.seal(unlock, user.vault_key, user.name.encode("utf-8"))
-        with self._lock:
-            self._con.execute("UPDATE users SET salt = ?, kdf = ?, verifier = ?, vault_nonce = ?, vault_wrapped = ? "
-                              "WHERE name = ?", (salt, json.dumps(kdf), crypto.verifier(unlock), nonce, wrapped, user.name))
-            self._con.commit()
         return User(user.name, user.created_at, user.seen_at, kdf, salt, unlock, user.vault_key, user.email, user.verified_at)
+
+    def _rewrap(self, user: User) -> None:
+        """Under the lock, uncommitted: the user's row moved onto `user`'s new password."""
+        nonce, wrapped = crypto.seal(user.unlock_key, user.vault_key, user.name.encode("utf-8"))
+        self._con.execute("UPDATE users SET salt = ?, kdf = ?, verifier = ?, vault_nonce = ?, vault_wrapped = ? "
+                          "WHERE name = ?", (user.salt, json.dumps(user.kdf), crypto.verifier(user.unlock_key), nonce,
+                                             wrapped, user.name))
 
     def rename(self, name, new_name, password) -> User:
         """A new name (the vault key's wrap binds the name, so it is wrapped again)."""
@@ -296,10 +307,27 @@ class UserStore:
 
     def set_setting(self, key: str, value: str) -> None:
         with self._lock:
-            self._con.execute("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
-                              "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                              (key, str(value), now_iso()))
+            self._put_setting(key, value)
             self._con.commit()
+
+    def _put_setting(self, key: str, value: str) -> None:
+        """Under the lock, uncommitted: a value of the login's own."""
+        self._con.execute("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+                          "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                          (key, str(value), now_iso()))
+
+    def _made_with(self, writes) -> None:
+        """A user made (or moved onto a new password) and its password kept, all in one transaction (the review of
+        2026-11-21, item 26): the row was committed first and the password kept after it, so a failure between them
+        left a user whose password nobody had, refused at every sign-in without one for good (and, moved off a
+        legacy password, its pairs unreadable). `writes` runs under the lock; any failure undoes all of it."""
+        with self._lock:
+            try:
+                writes()
+                self._con.commit()
+            except BaseException:
+                self._con.rollback()
+                raise
 
     def secret_kept(self) -> tuple[str, str] | None:
         """The secret user's name and password as this file keeps them, None before it is made."""
@@ -323,14 +351,26 @@ class UserStore:
             return kept
         name, password = SECRET_NAME, _secrets.token_urlsafe(24)
         if self.exists(name):
-            old = next((p for p in legacy if self.verify(name, p) is not None), None)
-            if old is None:
+            user = next((u for u in (self.verify(name, p) for p in legacy) if u is not None), None)
+            if user is None:
                 raise ValueError(f"there is a user named {name!r} with a password of their own")
-            self.change_password(name, old, password)
+            moved = self._rewrapped(user, password)
+
+            def row():
+                self._rewrap(moved)
         else:
-            self.create(name, password)
-        self.set_setting(SECRET_KEYS[0], name)
-        self.set_setting(SECRET_KEYS[1], password)
+            material = _material(name, check_password(password))
+
+            def row():
+                self._refuse_taken(name, None)
+                self._insert(name, None, None, material)
+
+        def writes():
+            row()
+            self._put_setting(SECRET_KEYS[0], name)
+            self._put_setting(SECRET_KEYS[1], password)
+
+        self._made_with(writes)
         return name, password
 
     def passwordless_kept(self) -> dict[str, str]:
@@ -364,10 +404,16 @@ class UserStore:
             return kept
         if self.exists(name):
             raise ValueError(f"there is a user named {name!r} with a password of their own")
-        password = _secrets.token_urlsafe(24)
-        made = self.create(name, password)
-        self.set_setting(PASSWORDLESS + made.name.lower(), password)
-        return made.name, password
+        name, password = clean_name(name), _secrets.token_urlsafe(24)
+        material = _material(name, check_password(password))
+
+        def writes():
+            self._refuse_taken(name, None)
+            self._insert(name, None, None, material)
+            self._put_setting(PASSWORDLESS + name.lower(), password)
+
+        self._made_with(writes)
+        return name, password
 
     # -- the sign-ups: an email, its code, then the name and the password --------------------------
     def start_signup(self, email, minutes: float = CODE_MINUTES) -> str:

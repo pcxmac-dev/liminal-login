@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.17.4 (2026-11-24)
+
+The review of 2026-11-21 (Monday list item 26), two P2s:
+- The secret user and `default` are no longer locked out for good when their first sign-in is cut short. The user's
+  row was committed, then its password kept in the login's database with commits of its own, so a failure between
+  them left a user whose password nobody had, refused at every sign-in without one; a secret user moving off 0.14.0's
+  password had its pairs sealed under one nobody kept. The row (or the move) and its password are now written in one
+  transaction, undone together on any failure, and the next sign-in makes the user as the first time would.
+- Sessions left without a sign-out are closed. One idle too long was ended only when its own token came back, so its
+  store stayed open and its key in memory until the process stopped, and every sign-in added one. Each sign-in and
+  each request that looks at a session now ends every session idle too long (a remote user's too), closing its store.
+
 ## 0.17.3 (2026-11-24)
 
 The review of 2026-11-21 (Monday list item 26), a P1: a user here whose name held an @ (ann@gmail.com, with no email set) had the password typed at every sign-in

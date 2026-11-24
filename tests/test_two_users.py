@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.client import HTTPConnection
 
 from liminal_libs import web
 from liminal_libs.apps import SESSION_HEADER, App, Scope
 
 from liminal_login.app import NOT_PASSWORDLESS, LoginApp
-from liminal_login.users import DEFAULT_NAME, PASSWORDLESS
+from liminal_login.users import DEFAULT_NAME, PASSWORDLESS, SECRET_KEYS
 
 
 def _port(url: str) -> int:
@@ -227,3 +228,84 @@ def test_two_browsers_signed_in_to_an_app_that_holds_the_login(folder, tmp_path,
         assert _call(port, "GET", "/login/api/me", cookie=cookies["secret"])[1]["name"] == "secret" and login.sessions() == ["secret"]
     finally:
         app.stop()
+
+
+class _FailsOnce:
+    """The users' connection, but the write that keeps one of these passwords fails once (a disk full, the process
+    stopped there): everything else passes through."""
+
+    def __init__(self, con, keys):
+        self._con, self.keys, self.failed = con, set(keys), []
+
+    def execute(self, sql, params=()):
+        if "INSERT INTO settings" in sql and params and params[0] in self.keys and params[0] not in self.failed:
+            self.failed.append(params[0])
+            raise OSError("the disk is full (a stand-in)")
+        return self._con.execute(sql, params)
+
+    def __getattr__(self, name):
+        return getattr(self._con, name)
+
+
+def test_a_first_sign_in_cut_short_never_locks_the_secret_or_default_user_out(served):
+    """The review of 2026-11-21, item 26 (19): the user's row was committed, then its password kept with commits of its
+    own; a failure between them left a user whose password nobody had, refused at every sign-in without one for good.
+    Now it is all or nothing: the next sign-in makes the user as if for the first time."""
+    app, port, lines = served
+    real = app.users._con
+    app.users._con = _FailsOnce(real, {SECRET_KEYS[1], PASSWORDLESS + "default"})
+    try:
+        assert _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[0] != 200
+        assert _call(port, "POST", "/api/sign-in/secret", {"name": "default"})[0] != 200
+        assert len(app.users._con.failed) == 2
+    finally:
+        app.users._con = real
+    for name in ("secret", "default"):
+        status, data, _ = _call(port, "POST", "/api/sign-in/secret", {"name": name})
+        assert status == 200 and data["user"]["name"] == name and data["passwordless"] is True
+    assert app.users.count() == 2 and sorted(app.users.passwordless_kept()) == ["default", "secret"]
+
+
+def test_a_secret_user_moved_off_its_legacy_password_keeps_its_pairs_when_cut_short(served):
+    """The same (19), on the way a secret user made with 0.14.0's password moves onto a kept one: the new password was
+    written, then kept apart; cut short between them, the user's pairs were sealed under a password nobody had."""
+    app, port, lines = served
+    from liminal_login.app import LEGACY_SECRET_PASSWORDS
+
+    app.users.create("secret", LEGACY_SECRET_PASSWORDS[0])
+    token = _call(port, "POST", "/api/sign-in", {"name": "secret", "password": LEGACY_SECRET_PASSWORDS[0]})[1]["token"]
+    assert _call(port, "PUT", "/api/pairs/acme-api-key", {"value": "kept from before", "kind": "key"}, token=token)[0] == 200
+    _call(port, "POST", "/api/sign-out", token=token)
+    real = app.users._con
+    app.users._con = _FailsOnce(real, {SECRET_KEYS[1]})
+    try:
+        assert _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[0] != 200
+    finally:
+        app.users._con = real
+    assert app.users.verify("secret", LEGACY_SECRET_PASSWORDS[0]) is not None  # undone: still on its old password
+    status, data, _ = _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})
+    assert status == 200 and data["user"]["name"] == "secret"
+    assert _call(port, "GET", "/api/pairs/acme-api-key", token=data["token"])[1]["value"] == "kept from before"
+
+
+def test_a_session_left_without_a_sign_out_is_closed_without_its_own_token(served, monkeypatch):
+    """The review of 2026-11-21, item 26 (20): a session idle too long was ended only when its own token came back, so
+    one left without a sign-out kept its store open and its key in memory for the process's life. Now any request
+    looking at a session, and any sign-in, ends every idle one."""
+    app, port, lines = served
+    monkeypatch.setenv("LIMINAL_LOGIN_SESSION_MINUTES", "1")
+    first = _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[1]["token"]
+    second = _call(port, "POST", "/api/sign-in/secret", {"name": "default"})[1]["token"]
+    with app._lock:
+        left = app._sessions[first]
+        left.last = time.monotonic() - 120
+    assert _call(port, "GET", "/api/me", token=second)[1]["name"] == "default"  # any request with the other token
+    assert first not in app._sessions and app.sessions() == ["default"]
+    assert left.vault._key is None  # its store closed, its key forgotten
+    assert any("secret's session ended (idle)" in m for m in lines)
+    # a sign-in ends them too
+    with app._lock:
+        kept = app._sessions[second]
+        kept.last = time.monotonic() - 120
+    third = _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[1]["token"]
+    assert second not in app._sessions and kept.vault._key is None and list(app._sessions) == [third]
