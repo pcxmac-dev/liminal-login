@@ -81,10 +81,14 @@ def _at(minutes: float) -> str:
 
 
 def clean_name(name) -> str:
-    """A user's name: 1 to 40 characters, no control characters, spaces trimmed."""
+    """A user's name: 1 to 40 characters, no control characters and no @, spaces trimmed. An @ is what says a user of
+    another login (name@their.domain), whose password goes to their own login: a user here named so had their
+    password sent to that host at every sign-in (0.17.3; the review of 2026-11-21, item 26)."""
     name = str(name or "").strip()
     if not name or len(name) > NAME_MAX or CONTROL.search(name):
         raise ValueError(f"a user's name is 1 to {NAME_MAX} characters")
+    if "@" in name:
+        raise ValueError("a user's name has no @ (name@domain is a user of another login); the address goes in email")
     return name
 
 
@@ -192,11 +196,15 @@ class UserStore:
             return self._con.execute("SELECT 1 FROM users WHERE name = ?", (str(name or "").strip(),)).fetchone() is not None
 
     def _row(self, who: str):
-        """A user's row by name, or by email when `who` holds an @."""
+        """A user's row by name, or by email when `who` holds an @ (and by name then too: a user made before 0.17.3 may
+        be named with one)."""
         who = str(who or "").strip()
-        column = "email" if "@" in who else "name"
         with self._lock:
-            return self._con.execute(f"SELECT * FROM users WHERE {column} = ?", (who,)).fetchone()
+            if "@" in who:
+                row = self._con.execute("SELECT * FROM users WHERE email = ?", (who,)).fetchone()
+                if row is not None:
+                    return row
+            return self._con.execute("SELECT * FROM users WHERE name = ?", (who,)).fetchone()
 
     def _refuse_taken(self, name: str | None, email: str | None) -> None:
         """Under the lock: ValueError when the name or the email is a user's already."""

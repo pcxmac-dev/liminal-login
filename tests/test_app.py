@@ -554,3 +554,22 @@ def test_a_request_whose_session_is_signed_out_under_it_is_told_to_sign_in_again
     app._sessions[token].vault.close()  # what a sign-out on another thread does, after this request took its session
     status, data, _ = _call(port, "GET", "/api/pairs/massive-api-key", token=token)
     assert status == 401 and "signed out while this was being asked" in data["error"]
+
+
+def test_a_name_with_an_at_is_never_a_local_users_and_never_sends_a_password_away(served, monkeypatch):
+    """The review of 2026-11-21 (item 26), a P1: a local user named ann@gmail.com (no email) had the password typed at
+    every sign-in posted to https://gmail.com/api/sign-in, and could never sign in here."""
+    from liminal_login import users as users_module
+
+    app, port, _lines = served
+    sent: list = []
+    monkeypatch.setattr(app, "_remote_call", lambda *a, **k: sent.append(a) or (401, {"error": "no"}))
+    status, data, _ = _call(port, "POST", "/api/users", {"name": "ann@gmail.com", "password": "correct horse battery"})
+    assert status == 400 and "no @" in data["error"]
+    with monkeypatch.context() as m:  # one made before 0.17.3, when such a name was taken
+        m.setattr(users_module, "clean_name", lambda name: str(name).strip())
+        app.users.create("old@gmail.com", "correct horse battery")
+    status, data, _ = _call(port, "POST", "/api/sign-in", {"name": "old@gmail.com", "password": "correct horse battery"})
+    assert status == 200 and data["user"]["name"] == "old@gmail.com" and sent == []
+    status, _data, _ = _call(port, "POST", "/api/sign-in", {"name": "old@gmail.com", "password": "a wrong one"})
+    assert status == 401 and sent == []  # refused here: the password never leaves

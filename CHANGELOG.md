@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.3 (2026-11-24)
+
+The review of 2026-11-21 (Monday list item 26), a P1: a user here whose name held an @ (ann@gmail.com, with no email set) had the password typed at every sign-in
+posted to that host (https://gmail.com/api/sign-in), taken for a user of another login, and could never sign in here.
+A user's name now has no @ (the address goes in the email). A user named so before is still this login's: one whose
+name or email matches is never asked of another login, and is looked up by name when no email matches.
+
 ## 0.17.2 (2026-11-24)
 
 The review of 2026-11-21 on your desktop (Monday list item 26), checked against the checkout:

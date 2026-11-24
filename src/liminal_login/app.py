@@ -457,7 +457,7 @@ class LoginApp(App):
             return None
         if self.scope.kind == "domain" and host == self.scope.domain:
             return None
-        if self.users.has_email(who):
+        if self.users.has_email(who) or self.users.exists(who):  # a user here by that address, or named so (before 0.17.3)
             return None
         return name, host
 
