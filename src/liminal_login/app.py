@@ -105,6 +105,17 @@ def _pointer_words(pointer) -> str:
     return instance or "its own folder"
 
 
+def _kept_words(kept) -> str:
+    """What a plugin keeps of where the users are, in words with no location: 0.18.0's pointer (engine:instance), or
+    0.19.0's preferred location by its kind alone ("a preferred postgres location")."""
+    if isinstance(kept.get("pointer"), dict):
+        return _pointer_words(kept["pointer"])
+    store = kept.get("store")
+    if isinstance(store, dict) and store.get("kind"):
+        return f"a preferred {store['kind']} location"
+    return "its own folder"
+
+
 POINTER_SAID = ("kind", "engine", "instance", "fallback", "at", "by")  # a pointer's parts the status says (no location)
 
 
@@ -610,7 +621,7 @@ class LoginApp(App):
                 place = p.place(kept)
             except Exception as e:  # noqa: BLE001 - LoginRefusal in its words, or anything else: its own folder
                 why = e.words if isinstance(e, LoginRefusal) else f"{type(e).__name__}: {e}"
-                note = f"pointed at {_pointer_words(kept.get('pointer'))}, which could not be used at this start ({why}): its own folder's users are used"
+                note = f"pointed at {_kept_words(kept)}, which could not be used at this start ({why}): its own folder's users are used"
                 self.log(f"login: {note}")
                 return replace(own, pointer=kept.get("pointer") or None, note=note)
             if isinstance(place, UsersPlace) and not place.own and place.users_file:

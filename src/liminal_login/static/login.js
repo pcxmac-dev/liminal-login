@@ -197,7 +197,7 @@
     const fields = (f.fields || []).map((x, xi) => {
       const id = `pf${fi}_${xi}`;
       const input = x.type === 'select'
-        ? `<select id="${id}" name="${esc(x.key)}">${(x.options || []).map((o) => `<option value="${esc(o.value)}"${o.value === x.value ? ' selected' : ''}>${esc(o.title || o.value)}</option>`).join('')}</select>`
+        ? `<select id="${id}" name="${esc(x.key)}">${(x.options || []).map((o) => `<option value="${esc(o.value)}"${o.value === x.value ? ' selected' : ''}${o.disabled ? ' disabled' : ''}>${esc(o.title || o.value)}</option>`).join('')}</select>`
         : `<input id="${id}" name="${esc(x.key)}" type="text" class="mono" ${kb('plain')} spellcheck="false" maxlength="1024" value="${esc(x.value || '')}" placeholder="${esc(x.placeholder || '')}">`;
       return `<div class="field${x.type === 'select' ? '' : ' wide'}"><label for="${id}">${esc(x.title || x.key)}</label>${input}</div>`;
     }).join('');

@@ -12,6 +12,9 @@ plugin-login-datastore 0.2.0):
   to someone not signed in.
 - A place whose users file cannot be opened at a start (its folder cannot be made, the file is not a database) leaves
   the login on its own folder, said in the log, the status and on the plugin's page, where it stopped the start before.
+- A place a plugin refuses at a start is said by what it kept without its location: 0.18.0's engine:instance, or
+  "a preferred <kind> location" (the datastore's of a kind it no longer keeps: its own folder, no fallback).
+- A plugin's pick may have options shown but not to be picked (`disabled`: the kinds not supported yet).
 - A preferred location kept by a plugin that is not installed here (the datastore's `store`) leaves the login on its
   own folder, said, as 0.18.0's `pointer` did.
 - A plugin's tab may hold forms (`forms`: a title, a note, its fields, text or a pick, its button and its question):

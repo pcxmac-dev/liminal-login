@@ -183,7 +183,7 @@ asked. What a plugin keeps is kept in the login's own folder's users file (`sett
 
 The datastore's Global tab keeps where the login's users are as a preference (0.19.0, with plugin-login-datastore
 0.2.0): a kind of database and its location as a URL (`file:///...` for a SQLite file or folder; a PostgreSQL, MariaDB,
-MongoDB or DuckDB location is kept but answered "not supported yet": the login's stores are SQLite only), an instance of
+MongoDB or DuckDB location is refused, "not supported yet": the login's stores are SQLite only), an instance of
 the platform's Databases section filling it in, and a local fallback folder (`app/.data` in the home folder unless
 another is kept) used when the preferred location cannot be used at a start. Changed by the admin alone, confirmed
 twice, refused for a location that holds anything but a login's users and whenever there are users on both sides. The
