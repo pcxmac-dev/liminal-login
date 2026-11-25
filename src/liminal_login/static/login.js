@@ -78,22 +78,70 @@
   // throughout, signed in too)
   const titled = (what) => { document.title = `${forTitle}: ${what}`; };
 
+  // -- the list, signed in (0.17.6; Monday list item 15: "Codebase in the login's, the integrator's and the charts' pages
+  // (the platform has it)"; the user's rule for every app: list | data | specifics | tray): on its own, the login's page
+  // is laid out as every app's page, its list on the left (your account, Codebase), the one picked in the middle, its
+  // specifics on the right, then the rail. Your account: who you are, your pairs and forms, your store's facts beside
+  // them. Codebase: the library's object every app holds (liminal_libs.apps.Codebase, api/codebase) drawn by the
+  // library's own script (codebase.js), as the platform draws it. Held in another app's page (?embedded=1) the account
+  // alone, as before; a library from before 1.59.0 has no codebase.js: the account alone too.
+  const C = window.LiminalCodebase || null;
+  let view = 'account';  // the one picked in the list
+  let codebaseShown = false;
+  function showCodebase() {
+    if (codebaseShown || !C) return;
+    codebaseShown = true;
+    // the page's own way to ask (relative paths: the login under another app's prefix asks its own, not that app's)
+    C.mount($('data'), $('side'), { get: (path) => api('GET', path.replace(/^\//, '')), send: (path, body) => api('POST', path.replace(/^\//, ''), body) });
+  }
+  function leaveCodebase() {
+    if (!codebaseShown) return;
+    codebaseShown = false;
+    C.unmount();
+  }
+  function listHtml() {
+    const item = (id, ic, title, sub) => `<button type="button" class="item${view === id ? ' active' : ''}" data-view="${id}">${icon(ic, 20)}
+      <span class="what"><span>${esc(title)}</span><span class="sub">${esc(sub)}</span></span></button>`;
+    return `<nav class="app-list" id="list" aria-label="The login's views">${item('account', 'key', 'Your account', 'who you are, your keys and accounts')}`
+      + `${item('codebase', 'branch', 'Codebase', 'its repositories, its code, by language')}</nav>`;
+  }
+  function columns(data, side) {
+    main.classList.add('cols');
+    main.innerHTML = `${listHtml()}<section class="app-data" id="data" aria-label="The one picked">${data}</section>`
+      + `<aside class="app-side" id="side" aria-label="Its specifics">${side}</aside>`;
+    main.querySelectorAll('#list [data-view]').forEach((b) => b.addEventListener('click', () => {
+      if (b.dataset.view === view) return;
+      view = b.dataset.view;
+      render();
+    }));
+  }
+
   async function render() {
     let st;
+    leaveCodebase();  // whatever is drawn now, the code base's panes are let go first
+    // the columns go only when one column is drawn in their place (a redraw signed in keeps them: no jump)
+    const flat = () => main.classList.remove('cols');
     try { st = await api('GET', 'api/status'); }
-    catch (e) { main.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
+    catch (e) { flat(); main.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
     forTitle = st.forTitle || 'Liminal';
     mail = st.signup || {};
     titled('sign in');
+    if (signup || !st.signedIn) { flat(); view = 'account'; }  // whoever signs in next opens on their account
     if (signup) return signup.token ? detailsForm() : codeForm();
     if (!st.signedIn) { tell(false); return entryForm(st); }
     const me = await api('GET', 'api/me');
+    titled(me.name);
+    tell(true, me.name);
+    // the code base is shown to one of this login's own users on a local login only, as the login answers it (app.py)
+    const mayCodebase = !me.remote && !(st.scope && st.scope.kind === 'domain');
+    const listed = !embedded && !!C && mayCodebase;
+    if (listed && view === 'codebase') { columns('', ''); showCodebase(); return; }
     const pairs = (await api('GET', 'api/pairs')).pairs;
     const known = (await api('GET', 'api/pairs/known')).known;  // the pairs the plugins here ask for
-    main.innerHTML = userCard(me) + pairsTable(pairs, known) + knownTable(known) + addForm(known) + changeForm(me);
-    titled(me.name);
+    const rest = pairsTable(pairs, known) + knownTable(known) + addForm(known) + changeForm(me);
+    if (!listed) { flat(); main.innerHTML = userCard(me) + storeFacts(me) + rest; }  // one column, in the order it always had
+    else columns(userCard(me) + rest, storeFacts(me));
     wire(me);
-    tell(true, me.name);
   }
 
   // -- signed out: the way in, or sign in with a password, or sign up ---------------------------------------------
@@ -301,12 +349,16 @@
 
   // -- signed in ---------------------------------------------------------------------------------
   function userCard(me) {
-    const s = me.store, kdf = s.kdf || {};
     return `<div class="user-head"><div class="avatar">${esc(me.name[0].toUpperCase())}</div>
         <div><h1>${esc(me.name)}</h1><div class="muted">${me.email ? `${esc(me.email)}${me.verified ? ' (verified)' : ' (not verified)'} · ` : ''}${me.admin ? "this login's admin · " : ''}${esc(forTitle)}; signed in; this session ends after ${esc(me.session.minutes)} minutes without a request</div></div>
         <div class="row" style="margin-left:auto"><button type="button" id="signout" title="Sign out: your store closes">${icon('logout', 18)} Sign out</button></div></div>
-      ${me.passwordless ? `<p class="muted note">${me.admin ? 'The secret user' : 'This user'} comes in without a password, so its keys are not protected by one.</p>` : ''}
-      <h2>Your store</h2>
+      ${me.passwordless ? `<p class="muted note">${me.admin ? 'The secret user' : 'This user'} comes in without a password, so its keys are not protected by one.</p>` : ''}`;
+  }
+
+  // your store's facts: the account's specifics, beside it in the right-hand column (0.17.6; under the card before)
+  function storeFacts(me) {
+    const s = me.store, kdf = s.kdf || {};
+    return `<h2>Your store</h2>
       <dl class="facts">
         <dt>Created</dt><dd>${esc(when(me.createdAt))}</dd>
         <dt>Last sign-in</dt><dd>${esc(when(me.seenAt))}</dd>

@@ -40,6 +40,7 @@ from liminal_libs import layout
 from liminal_libs.apps import (PAIRS_PATH, REMOTES_VAR, SESSION_HEADER, SUPER_TITLE_VAR, SUPER_URL_VAR, SUPER_VAR, App,
                                Refused, Scope, remotes_from)
 from liminal_libs.apps import remote_url as remote_address
+from liminal_libs.apps.app import CODEBASE_PATH as CODEBASE
 from liminal_libs.layout import data_dir
 from liminal_libs.mail import MailError, Mailer, mask, mx_records
 from liminal_libs.web import WRITE_HEADER
@@ -654,6 +655,14 @@ class LoginApp(App):
             s = self.session(handler)
             if s is not None and self._secret_password_kept(s):
                 raise Refused(HTTPStatus.FORBIDDEN, SECRET_PASSWORD_KEPT)
+        if path == CODEBASE or path.startswith(CODEBASE + "/"):
+            # the code base (0.17.6; Monday list item 15): the library's route every App answers (its repositories, their
+            # remotes, how far behind), here only for who may see this machine's code: one of this login's own users
+            # signed in to a local login (never a user of another login, and never on a domain's login, whose users are
+            # anyone who signs up by email). Its page lists it only then (login.js mayCodebase).
+            self._require(handler)
+            if self.scope.kind == "domain":
+                raise Refused(HTTPStatus.FORBIDDEN, "a domain's login shows no code base: its users are anyone who signs up")
         if path in REMOTE_ROUTES or (path.startswith("/api/pairs/") and path != "/api/pairs/known"):
             s = self.session(handler)
             if isinstance(s, RemoteSession):  # a user of another login: asked there (0.15.0)

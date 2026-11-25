@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.6 (2026-11-24)
+
+Codebase on the login's page (Monday list item 15: "Codebase in the login's, the integrator's and the charts' pages
+(the platform has it)"; the user, 2026-11-16: "this class will be added to all the 'apps' just like connections"):
+- Signed in on its own, the page is laid out as every app's: its list on the left (Your account, Codebase), the one
+  picked in the middle, its specifics on the right, then the rail. Your account is as it was, your store's facts now
+  beside it; Codebase is the library's object every App holds (its repositories, how far each is behind its remote,
+  each language's share), drawn by the library's own codebase.js as the platform draws it, asked by relative paths.
+  Held in another app's page, for a user of another login, on a domain's login or with a library from before 1.59.0,
+  the page is one column as before.
+- `GET /api/codebase` and `POST /api/codebase/fetch` (the library's routes) answer only one of this login's own users
+  signed in to a local login. They answered anyone who reached the login before, signed in or not; a domain's login,
+  whose users are anyone who signs up by email, now refuses them.
+
 ## 0.17.5 (2026-11-24)
 
 The review of 2026-11-21 (Monday list item 26), five P3s:
