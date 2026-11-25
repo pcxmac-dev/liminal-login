@@ -114,8 +114,13 @@ def test_the_page_lists_the_account_and_codebase_and_hands_codebase_the_two_pane
     assert "leaveCodebase();  // whatever is drawn now" in page and "C.unmount();" in page
     # held in another app's page, a remote user, a domain's login or an older library: one column, as before
     assert "const mayCodebase = !me.remote && !(st.scope && st.scope.kind === 'domain');" in page
-    assert "const listed = !embedded && !!C && mayCodebase;" in page
-    assert "main.innerHTML = userCard(me) + storeFacts(me) + rest;" in page and "columns(userCard(me) + rest, storeFacts(me));" in page
+    # 0.18.0: the list is drawn for the code base or the login's plugins, each shown only where it may be
+    assert "const withCodebase = !!C && mayCodebase;" in page
+    assert "const listed = !embedded && (withCodebase || plugins.length > 0);" in page
+    assert "main.innerHTML = userCard(me) + storeFacts(me) + rest;" in page
+    assert "columns(userCard(me) + rest, storeFacts(me), withCodebase);" in page
+    assert "plugins = embedded ? [] : ((await api('GET', 'api/login-plugins')).plugins || []);" in page
+    assert "api/app/apis?plugin=${encodeURIComponent(p.name)}" in page  # its External and Internal API, the frame's
     html = (LoginApp.STATIC / "index.html").read_text(encoding="utf-8")
     assert html.index('src="icons.js"') < html.index('src="codebase.js"') < html.index('src="login.js"')
     assert not (LoginApp.STATIC / "codebase.js").exists()  # the library's file, never shadowed by one of the page's own

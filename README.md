@@ -170,7 +170,21 @@ apps' header). `GET /api/status`, `POST /api/users`, `POST /api/sign-in`, `POST 
 `POST /api/signup`, `POST /api/signup/resend`, `POST /api/signup/verify`, `POST /api/signup/complete`,
 `GET /api/me`, `PUT /api/me/password`, `GET /api/pairs`, `GET|PUT|DELETE /api/pairs/<name>`,
 `GET /api/pairs/known` (the pairs an inheriting app's plugins ask for; none on its own), `GET /api/tray`,
-`GET /api/app`.
+`GET /api/app`, `GET /api/login-plugins`, `GET|POST /api/login-plugins/<name>/<tab>` (0.18.0).
+
+## Its plugins (0.18.0)
+
+The login attaches the login plugins installed (liminal-libs 1.92.0's `LoginPlugin`; the first is
+`plugin-login-datastore`). Each is a line in the page's list, its own tabs followed by External API and Internal API.
+A plugin is shown only what the login hands it for the person asking: their name, whether they are its admin (the
+secret user), their own keystore by pair names, kinds and dates (never a value, never another user's), and where the
+login keeps its users. A change on a tab only the admin may change is refused to anyone else before the plugin is
+asked. What a plugin keeps is kept in the login's own folder's users file (`settings`, `plugin:<name>`).
+
+The datastore's Global tab may point the login at one central user database, a SQLite instance of the platform's
+Databases section: confirmed twice, refused for an instance that holds anything but a login's users and whenever there
+are users on both sides. The login reads its users and keystores from there from its next start; its own folder's file
+keeps its own settings, so it can be pointed back. Moving users is not done.
 
 Inherited today by the charts app (liminal-charts): its front serves this page under `/login/`, draws the
 user icon at the foot of its rail and, when nothing answers at `LIMINAL_LOGIN_URL` (8795), starts this app

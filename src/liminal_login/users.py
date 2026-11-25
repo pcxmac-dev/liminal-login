@@ -321,6 +321,13 @@ class UserStore:
             row = self._con.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
 
+    def setting_keys(self, prefix: str) -> list[str]:
+        """The keys of the login's own values that begin with `prefix` (0.18.0: what its plugins keep), in order."""
+        with self._lock:
+            rows = self._con.execute("SELECT key FROM settings WHERE substr(key, 1, ?) = ? ORDER BY key",
+                                     (len(prefix), prefix)).fetchall()
+        return [r["key"] for r in rows]
+
     def set_setting(self, key: str, value: str) -> None:
         with self._lock:
             self._put_setting(key, value)

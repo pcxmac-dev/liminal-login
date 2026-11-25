@@ -99,15 +99,21 @@
     codebaseShown = false;
     C.unmount();
   }
-  function listHtml() {
-    const item = (id, ic, title, sub) => `<button type="button" class="item${view === id ? ' active' : ''}" data-view="${id}">${icon(ic, 20)}
+  // the login's plugins (0.18.0; liminal-libs 1.92.0's LoginPlugin): each a line in the list, its page the tabs it
+  // declares (Mine and Global for the datastore), then its External API and Internal API, as every plugin's page has them
+  let plugins = [];  // [{name, title, about, icon, version, tabs: [{id, title, admin}]}], as the login lists them
+  let pluginTab = {};  // the tab shown of each plugin, by its name
+  const A = window.LiminalApis || null, I = window.LiminalInternal || null;  // the library's (1.49.0, 1.63.0)
+  function listHtml(withCodebase) {
+    const item = (id, ic, title, sub) => `<button type="button" class="item${view === id ? ' active' : ''}" data-view="${esc(id)}">${icon(ic, 20)}
       <span class="what"><span>${esc(title)}</span><span class="sub">${esc(sub)}</span></span></button>`;
     return `<nav class="app-list" id="list" aria-label="The login's views">${item('account', 'key', 'Your account', 'who you are, your keys and accounts')}`
-      + `${item('codebase', 'branch', 'Codebase', 'its repositories, its code, by language')}</nav>`;
+      + plugins.map((p) => item(`plugin:${p.name}`, p.icon || 'plug', p.title || p.name, p.about || '')).join('')
+      + `${withCodebase ? item('codebase', 'branch', 'Codebase', 'its repositories, its code, by language') : ''}</nav>`;
   }
-  function columns(data, side) {
+  function columns(data, side, withCodebase = true) {
     main.classList.add('cols');
-    main.innerHTML = `${listHtml()}<section class="app-data" id="data" aria-label="The one picked">${data}</section>`
+    main.innerHTML = `${listHtml(withCodebase)}<section class="app-data" id="data" aria-label="The one picked">${data}</section>`
       + `<aside class="app-side" id="side" aria-label="Its specifics">${side}</aside>`;
     main.querySelectorAll('#list [data-view]').forEach((b) => b.addEventListener('click', () => {
       if (b.dataset.view === view) return;
@@ -134,14 +140,96 @@
     tell(true, me.name);
     // the code base is shown to one of this login's own users on a local login only, as the login answers it (app.py)
     const mayCodebase = !me.remote && !(st.scope && st.scope.kind === 'domain');
-    const listed = !embedded && !!C && mayCodebase;
-    if (listed && view === 'codebase') { columns('', ''); showCodebase(); return; }
+    try { plugins = embedded ? [] : ((await api('GET', 'api/login-plugins')).plugins || []); } catch (e) { plugins = []; }  // a login before 0.18.0: none
+    const withCodebase = !!C && mayCodebase;
+    const listed = !embedded && (withCodebase || plugins.length > 0);
+    if (listed && view === 'codebase' && withCodebase) { columns('', ''); showCodebase(); return; }
+    const picked = view.startsWith('plugin:') ? plugins.find((p) => `plugin:${p.name}` === view) : null;
+    if (listed && picked) { columns('', '', withCodebase); return showPlugin(picked, me); }
+    if (view !== 'account') view = 'account';  // a plugin that is gone, or the code base where it is not shown
     const pairs = (await api('GET', 'api/pairs')).pairs;
     const known = (await api('GET', 'api/pairs/known')).known;  // the pairs the plugins here ask for
     const rest = pairsTable(pairs, known) + knownTable(known) + addForm(known) + changeForm(me);
     if (!listed) { flat(); main.innerHTML = userCard(me) + storeFacts(me) + rest; }  // one column, in the order it always had
-    else columns(userCard(me) + rest, storeFacts(me));
+    else columns(userCard(me) + rest, storeFacts(me), withCodebase);
     wire(me);
+  }
+
+  // -- a plugin's page: its tabs, then External API and Internal API -------------------------------------------------
+  function pluginTabs(p) {
+    const own = (p.tabs || []).map((t) => ({ id: t.id, title: t.title }));
+    return [...own, ...(A ? [{ id: 'external', title: 'External API' }] : []), ...(I ? [{ id: 'internal', title: 'Internal API' }] : [])];
+  }
+  function tabsHtml(list, shown) {
+    if (I) return I.tabs(list, shown, 'Its pages');
+    return `<nav class="in-tabs" role="tablist">${list.map((t) => `<button type="button" role="tab" data-api-tab="${esc(t.id)}" aria-selected="${t.id === shown}">${esc(t.title)}</button>`).join('')}</nav>`;
+  }
+  async function showPlugin(p, me) {
+    const list = pluginTabs(p);
+    const shown = list.some((t) => t.id === pluginTab[p.name]) ? pluginTab[p.name] : (list[0] || {}).id;
+    titled(`${p.title || p.name}: ${(list.find((t) => t.id === shown) || {}).title || ''}`);
+    const data = $('data'), side = $('side');
+    const own = (p.tabs || []).find((t) => t.id === shown);
+    side.innerHTML = `<h2>${esc(p.title || p.name)}</h2><p class="muted">${esc(p.about || '')}</p>
+      <dl class="facts"><dt>Version</dt><dd>${esc(p.version || '')}</dd><dt>You</dt><dd>${esc(me.name)}${me.admin ? " (this login's admin)" : ''}</dd>
+      ${own && own.admin ? `<dt>This tab</dt><dd>${me.admin ? 'you may change it' : "only this login's admin, its secret user, may change it"}</dd>` : ''}</dl>`;
+    data.innerHTML = `<h1>${esc(p.title || p.name)}</h1>${tabsHtml(list, shown)}<div id="pluginBody"><p class="muted">Asking…</p></div>`;
+    data.querySelectorAll('[data-api-tab]').forEach((b) => b.addEventListener('click', () => {
+      pluginTab[p.name] = b.dataset.apiTab;
+      showPlugin(p, me);
+    }));
+    const body = $('pluginBody');
+    try {
+      if (shown === 'external' || shown === 'internal') {
+        const d = await api('GET', `api/app/apis?plugin=${encodeURIComponent(p.name)}`);
+        body.innerHTML = shown === 'external' ? A.html(d.apis || [], d.apiFacts || {}, { fold: true, title: 'What it attaches to' })
+          : I.html(d.internal || null, { owner: `login:${p.name}`, title: 'What it shares with the login', app: 'the login' });
+        return;
+      }
+      body.innerHTML = pageHtml(await api('GET', `api/login-plugins/${encodeURIComponent(p.name)}/${encodeURIComponent(shown)}`));
+      wireActs(p, shown, me);
+    } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+  }
+  // what a plugin's tab shows: its title and note, its facts, its tables (a row's `act`: a change asked in the row)
+  function pageHtml(d) {
+    d = d || {};
+    const facts = (d.facts || []).map((f) => `<dt>${esc(f.label)}</dt><dd${f.mono ? ' class="mono"' : ''}>${esc(f.value)}</dd>`).join('');
+    const tables = (d.tables || []).map((t, ti) => {
+      const cols = t.columns || [];
+      const rows = (t.rows || []).map((r, ri) => `<tr>${cols.map((c) => `<td${c.mono ? ' class="mono"' : ''}>${esc(r[c.key])}</td>`).join('')}
+        <td class="tools">${r.act ? `<span class="acts"><button type="button" class="act" data-t="${ti}" data-r="${ri}">${esc(r.act.label)}</button></span>
+          <span class="ask" hidden><span class="words"></span> <button type="button" class="yes accent">Yes</button><button type="button" class="no">No</button></span>` : ''}</td></tr>`).join('');
+      return `<h2>${esc(t.title || '')}</h2>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ''}${rows ? `<table class="list plugin-table"><thead><tr>${cols.map((c) => `<th>${esc(c.title || '')}</th>`).join('')}<th></th></tr></thead><tbody>${rows}</tbody></table>`
+        : `<p class="muted">${esc(t.empty || 'Nothing here.')}</p>`}`;
+    }).join('');
+    shownPage = d;
+    return `${d.title ? `<h2>${esc(d.title)}</h2>` : ''}${d.note ? `<p class="muted">${esc(d.note)}</p>` : ''}${facts ? `<dl class="facts">${facts}</dl>` : ''}${tables}<p id="actErr" class="error"></p>`;
+  }
+  let shownPage = null;
+  // a change asked in its row: the row's question first, then the server's own second question (a refusal naming the
+  // argument that accepts it), each answered in the row; nothing is sent before the first Yes
+  function wireActs(p, tab, me) {
+    main.querySelectorAll('button.act').forEach((b) => {
+      const tr = b.closest('tr'), acts = tr.querySelector('.acts'), ask = tr.querySelector('.ask'), words = ask.querySelector('.words');
+      const row = ((shownPage.tables || [])[+b.dataset.t].rows || [])[+b.dataset.r];
+      let sent = { ...(row.act.body || {}), confirm: true };
+      const asking = (on, said) => { acts.hidden = on; ask.hidden = !on; if (said !== undefined) words.textContent = said; if (on) focusFirst(ask.querySelector('.no')); };
+      b.addEventListener('click', () => { sent = { ...(row.act.body || {}), confirm: true }; asking(true, row.act.ask || 'Change it?'); });
+      ask.querySelector('.no').addEventListener('click', () => asking(false));
+      ask.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); asking(false); } });
+      ask.querySelector('.yes').addEventListener('click', async () => {
+        $('actErr').textContent = '';
+        try {
+          const r = await fetch(`api/login-plugins/${encodeURIComponent(p.name)}/${encodeURIComponent(tab)}`,
+            { method: 'POST', headers: WRITE, body: JSON.stringify(sent), credentials: 'same-origin' });
+          let d = null;
+          try { d = await r.json(); } catch (e) { d = null; }
+          if (r.status === 409 && d && d.accept) { sent = { ...sent, [d.accept]: true }; asking(true, d.error); return; }
+          if (!r.ok) { asking(false); $('actErr').textContent = (d && d.error) || `the login answered ${r.status}`; return; }
+          showPlugin(p, me);
+        } catch (e) { asking(false); $('actErr').textContent = e.message; }
+      });
+    });
   }
 
   // -- signed out: the way in, or sign in with a password, or sign up ---------------------------------------------

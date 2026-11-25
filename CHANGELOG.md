@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.18.0 (2026-11-25)
+
+The login's plugins, and the first of them, the datastore (Monday list item 12; item 30, step 8; the user, 2026-11-15:
+"also create a plugin for the login app that is used to connect to or examine the datastore that has user credentials
+and other keys related to the user"; liminal-libs 1.92.0's LoginPlugin):
+- The login attaches its plugins (the registry's login plugins; those it is given, in a test) the first time they are
+  asked for, never in its constructor, and lets them go when it stops. `GET /api/login-plugins` lists them with their
+  tabs to anyone signed in; `GET /api/login-plugins/<name>/<tab>` is a tab's page and `POST` a change on it.
+- A plugin sees a `Viewer` made for each request: the person's name, whether they are the login's admin, their own
+  keystore (its file, how it is reached, its size, its pairs by name, kind, label and dates; never a value, never
+  another user's), where the login keeps its users, and what the plugin keeps. A change on a tab only the admin may
+  change is refused to anyone else (403) before the plugin is asked, and said in the log.
+- What a plugin keeps (a change's `keep`) is kept in the login's own folder's users file (`settings`, `plugin:<name>`),
+  never a file of the plugin's.
+- Where the users are is read as the login starts: its own folder, unless a plugin places them elsewhere by what it
+  keeps (`place`): the datastore's central database. The users file and the keystores are then read from there; the
+  own folder's file still holds the login's own settings. A place that cannot be used at a start (the plugin not
+  installed here, the instance gone or no longer a login's) leaves the login on its own folder, said in its log, its
+  status (`place`) and on the plugin's page.
+- The page lists each plugin under Your account, its tabs (the datastore's Mine and Global) followed by External API and
+  Internal API, drawn by the library's apis.js and internal.js (`GET /api/app/apis?plugin=<name>`, the frame's). A
+  change in a row is asked in the row, then the login's own second question, each answered there.
+- `UserStore.setting_keys(prefix)`; `LoginApp.own_users` (its own folder's users file), `place`, `stores_dir`,
+  `login_plugins()`, `kept_of`, `keep_for`, `viewer`. The command line's `user` and `status` still read the own
+  folder's users file.
+
 ## 0.17.7 (2026-11-24)
 
 Preferences and licences in each user's own store (Monday list item 21; the user, 2026-11-19: "preferences, keys,

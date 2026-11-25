@@ -31,7 +31,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import unquote, urlencode
@@ -44,6 +44,8 @@ from liminal_libs.apps.app import CODEBASE_PATH as CODEBASE
 from liminal_libs.layout import data_dir
 from liminal_libs.mail import MailError, Mailer, mask, mx_records
 from liminal_libs.web import WRITE_HEADER
+from liminal_libs.apps import asking
+from liminal_libs.sources.plugin import Keystore, LoginPlugin, LoginRefusal, UsersPlace, Viewer
 from . import __version__
 from .users import CODE_MINUTES, DEFAULT_NAME, User, UserStore
 from .vault import PAIR_NAME, KeyPairStore, VaultClosed, store_file
@@ -78,10 +80,23 @@ SECRET_PASSWORD_KEPT = "this user's password is a key the login keeps: it is nev
 # is, and in the same way in (the name, then the icon). It is an ordinary user. The secret user is the login's admin
 # (the same day: "let the secret user be the admin"): `admin` in /api/me, for what only the admin may change.
 NOT_PASSWORDLESS = "only the secret and the default users come in without a password: sign in with yours"
+# The login's plugins (0.18.0; Monday list item 12, item 30 step 8; liminal-libs 1.92.0's LoginPlugin): what each keeps
+# through the login is kept in its own folder's users file, `settings`, under this prefix and the plugin's name (never a
+# file of the plugin's); its pages and changes at these routes
+PLUGIN_KEPT = "plugin:"
+PLUGINS_PATH = "/api/login-plugins"  # GET: the login's plugins; /<name>/<tab>: GET its page, POST a change on it
+ADMIN_ONLY = "only this login's admin, its secret user, may change this: anyone signed in sees it"
 CODE_SUBJECT = "Your {title} code"
 CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
              "Type it on the page that asked for it within {minutes:g} minutes. If you did not ask for an "
              "account, nothing happens: ignore this message.\n")
+
+
+def _pointer_words(pointer) -> str:
+    """A pointer to a central database in words: engine:instance, or "its own folder"."""
+    if isinstance(pointer, dict) and pointer.get("engine") and pointer.get("instance"):
+        return f"{pointer['engine']}:{pointer['instance']}"
+    return "its own folder"
 
 
 def login_dir() -> Path:
@@ -204,11 +219,16 @@ class LoginApp(App):
     PORT_VAR = "LIMINAL_LOGIN_PORT"
     STATIC = Path(__file__).parent / "static"
     API = "1.3"  # 1.3 (0.13.0): on its own unless inherited; `for` null on its own, `superclass` in the status
+    READ_HOOKS = ("page", "place")  # its plugins' hooks that only read (0.18.0): noted as reads in who talks to whom
 
     def __init__(self, directory: Path | None = None, log=print, failure_delay: float = FAILURE_DELAY_S, mailer=None,
                  superclass: Superclass | str | None = None, scope: Scope | None = None, remotes: dict | None = None,
-                 port: int | None = None):
+                 port: int | None = None, login_plugins=None):
         super().__init__(log)
+        # its plugins (0.18.0): those given (a test's), else the registry's login plugins, attached when first asked for
+        self._given_plugins = list(login_plugins) if login_plugins is not None else None
+        self._plugins_lock = threading.Lock()
+        self._plugins_attached = False
         self._port_told = port  # the port it was told to answer at (`serve --port`): before its variable and its file
         # the app that inherits this login, as it said (a Superclass, or its short name), else LIMINAL_LOGIN_FOR; none:
         # the login on its own
@@ -227,7 +247,14 @@ class LoginApp(App):
                                                        else self.scope.data_dir(login_dir()))
         self.dir = folder_for(self.root, self.scope, sup)
         self.dir.mkdir(parents=True, exist_ok=True)
-        self.users = UserStore(self.dir / "users.db")
+        # its own folder's users file: its users, unless a plugin of it points it elsewhere, and always its own settings
+        # (the secret user's, and what its plugins keep: where it points among them)
+        self.own_users = UserStore(self.dir / "users.db")
+        # where its users and their keystores are (0.18.0): its own folder, or the central database a plugin points it
+        # to, read once as it starts (a change takes the next start)
+        self.place = self._users_place()
+        self.users = self.own_users if self.place.own else UserStore(Path(self.place.users_file))
+        self.stores_dir = Path(self.place.stores) if not self.place.own and self.place.stores else self.dir / "users"
         self.mailer = mailer or Mailer(log=self.log, cfg=self.scope.mail_variables())
         self._exchangers: tuple[float, list[str]] | None = None  # the domain's mail record, looked up now and then
         self.last_sent: dict | None = None  # the mail server's word on the last code sent (the status, the page)
@@ -457,7 +484,7 @@ class LoginApp(App):
         return s
 
     def _open(self, user: User) -> Session:
-        vault = KeyPairStore(store_file(self.dir / "users", user.name), user.vault_key)
+        vault = KeyPairStore(store_file(self.stores_dir, user.name), user.vault_key)
         s = Session(secrets.token_urlsafe(32), user, vault, time.monotonic())
         with self._lock:
             gone = self._sweep(s.last)
@@ -488,6 +515,8 @@ class LoginApp(App):
     def stop(self) -> None:
         super().stop()
         self.end_sessions()
+        for name in list(self._plugins):  # its plugins let go (the frame leaves them to an app with a stop of its own)
+            self.detach(name)
         # the remote users' sign-outs a moment to go out before the process ends: a short wait, never a long one
         deadline = time.monotonic() + SIGN_OUT_WAIT_SECONDS
         with self._lock:
@@ -497,7 +526,148 @@ class LoginApp(App):
 
     def close(self) -> None:
         self.stop()
-        self.users.close()
+        if self.users is not self.own_users:
+            self.users.close()
+        self.own_users.close()
+
+    # -- its plugins (0.18.0; liminal-libs 1.92.0: LoginPlugin) -------------------------------------------------------
+    def login_plugins(self) -> dict:
+        """The login's plugins attached here, by name, in their order: those it was given, else the registry's login
+        plugins, each attached the first time they are asked for (a plugin another app holds is left to it)."""
+        with self._plugins_lock:
+            if not self._plugins_attached and not self.stopping:
+                self._plugins_attached = True
+                for p in self._candidates():
+                    if getattr(p, "app", None) is None:
+                        try:
+                            self.attach(p)
+                        except Exception as e:  # noqa: BLE001 - one that cannot be attached is said, the others go on
+                            self.log(f"login: {p.name} could not be attached ({type(e).__name__}: {e})")
+        return {n: p for n, p in self._plugins.items() if isinstance(p, LoginPlugin)}
+
+    def _candidates(self) -> list:
+        if self._given_plugins is not None:
+            return [p for p in self._given_plugins if isinstance(p, LoginPlugin)]
+        from liminal_libs.sources import registry  # when asked: it loads the plugins
+
+        return list(registry.logins().values())
+
+    def kept_of(self, name: str) -> dict:
+        """What a plugin keeps through this login (its own folder's settings, PLUGIN_KEPT + its name): {} for nothing."""
+        raw = self.own_users.setting(PLUGIN_KEPT + name)
+        try:
+            kept = json.loads(raw) if raw else {}
+        except ValueError:
+            kept = {}
+        return kept if isinstance(kept, dict) else {}
+
+    def keep_for(self, name: str, changes: dict) -> dict:
+        """A plugin's `keep` kept: each name set to its value, or forgotten for None; the whole of what it keeps."""
+        kept = self.kept_of(name)
+        for k, v in changes.items():
+            if v is None:
+                kept.pop(str(k), None)
+            else:
+                kept[str(k)] = v
+        self.own_users.set_setting(PLUGIN_KEPT + name, json.dumps(kept, sort_keys=True))
+        return kept
+
+    def _users_place(self) -> UsersPlace:
+        """Where this login's users are, as it starts: its own folder, unless one of its plugins says otherwise by what it
+        keeps (`place`). A plugin that cannot say (not installed here, or its place cannot be reached): its own folder,
+        said in the log and on its page. The plugins are looked for only when one of them keeps something here."""
+        own = UsersPlace(own=True, users_file=str(self.dir / "users.db"), stores=str(self.dir / "users"), folder=str(self.dir))
+        kept_names = [k[len(PLUGIN_KEPT):] for k in self.own_users.setting_keys(PLUGIN_KEPT)]
+        if not kept_names:
+            return own
+        try:
+            candidates = {p.name: p for p in self._candidates()}
+        except Exception as e:  # noqa: BLE001 - the plugins could not be loaded: its own folder, said
+            candidates = {}
+            self.log(f"login: its plugins could not be loaded ({type(e).__name__}: {e})")
+        for name in kept_names:
+            kept = self.kept_of(name)
+            p = candidates.get(name)
+            if p is None:
+                if kept.get("pointer"):
+                    note = (f"{name}, which points this login elsewhere, is not installed here: its own folder's users "
+                            "are used")
+                    self.log(f"login: {note}")
+                    return replace(own, note=note)
+                continue
+            if not p.gives("place"):
+                continue
+            try:
+                place = p.place(kept)
+            except Exception as e:  # noqa: BLE001 - LoginRefusal in its words, or anything else: its own folder
+                why = e.words if isinstance(e, LoginRefusal) else f"{type(e).__name__}: {e}"
+                note = f"pointed at {_pointer_words(kept.get('pointer'))}, which could not be used at this start ({why}): its own folder's users are used"
+                self.log(f"login: {note}")
+                return replace(own, pointer=kept.get("pointer") or None, note=note)
+            if isinstance(place, UsersPlace) and not place.own and place.users_file:
+                self.log(f"login: its users are read from {_pointer_words(place.pointer)} ({place.users_file})")
+                return place
+        return own
+
+    def current_place(self) -> UsersPlace:
+        """Where its users are now, with their number and names (no more of them)."""
+        names = tuple(u["name"] for u in self.users.names())
+        return replace(self.place, users=len(names), names=names)
+
+    def viewer(self, s) -> Viewer:
+        """The person of a session as a login plugin is shown them: never a value, a password or a key."""
+        if isinstance(s, RemoteSession):
+            return Viewer(s.user.name, admin=False, remote=s.remote, keystore=None, place=self.current_place())
+        path = Path(s.vault.path)
+        size = sum(f.stat().st_size for f in (path, path.with_name(path.name + "-wal")) if f.is_file())
+        store = Keystore(s.user.name, str(path), "file", "this machine's own disk: opened by this login while you are "
+                         "signed in, its values sealed under your vault key", size, tuple(s.vault.names()))
+        return Viewer(s.user.name, admin=self.is_admin(s), remote="", keystore=store, place=self.current_place())
+
+    def _plugin_route(self, handler, method: str, path: str, body: dict):
+        """The login's plugins' routes (PLUGINS_PATH): any signed-in user sees their list and their tabs' pages; a change
+        on a tab that only the admin may change is refused to anyone else before the plugin is asked."""
+        s = self.session(handler)
+        if s is None:
+            raise Refused(HTTPStatus.UNAUTHORIZED, "not signed in")
+        found = self.login_plugins()
+        rest = path[len(PLUGINS_PATH):].strip("/")
+        if not rest and method == "GET":
+            return 200, {"plugins": [{"name": p.name, "title": p.title, "about": p.about, "icon": getattr(p, "ICON", "") or "plug",
+                                      "version": p.version, "tabs": [t.as_dict() for t in p.TABS]} for p in found.values()],
+                         "admin": self.is_admin(s)}
+        name, _, tab_id = rest.partition("/")
+        p = found.get(name)
+        if p is None:
+            raise Refused(HTTPStatus.NOT_FOUND, f"no plugin {name!r} is attached to this login")
+        tab = p.tab(tab_id)
+        if tab is None:
+            raise Refused(HTTPStatus.NOT_FOUND, f"{p.title or name} has no tab {tab_id!r}")
+        viewer = replace(self.viewer(s), kept=self.kept_of(name))
+        if method == "GET":
+            with asking.asking(asking.PAGE):
+                try:
+                    return 200, self.ask(name, "page", tab.id, viewer)
+                except LoginRefusal as e:
+                    return e.status, e.answer()
+        if method != "POST":
+            raise Refused(HTTPStatus.METHOD_NOT_ALLOWED, "a tab is read (GET) or changed (POST)")
+        if tab.admin and not viewer.admin:
+            self.log(f"login: {s.user.name} was refused a change on {name}'s {tab.id} tab (not the admin)")
+            raise Refused(HTTPStatus.FORBIDDEN, ADMIN_ONLY)
+        with asking.asking(asking.PAGE):
+            try:
+                answer = self.ask(name, "change", tab.id, viewer, dict(body))
+            except LoginRefusal as e:
+                return e.status, e.answer()
+        answer = dict(answer or {})
+        keep = answer.pop("keep", None)
+        if isinstance(keep, dict) and keep:
+            self.keep_for(name, keep)
+            self.log(f"login: {s.user.name} changed {name}'s {tab.id} tab: {', '.join(sorted(keep))} kept "
+                     "(taken at the login's next start)")
+            answer["kept"] = sorted(keep)
+        return 200, answer
 
     def _cookie(self, token: str | None) -> list[tuple[str, str]]:
         value = f"{self.cookie_name}={token}; Path=/; HttpOnly; SameSite=Strict" if token \
@@ -689,7 +859,7 @@ class LoginApp(App):
                          "remote": s.remote if isinstance(s, RemoteSession) else None, "admin": self.is_admin(s),
                          "for": self.namespace, "forTitle": self.title_for,
                          "superclass": self.superclass.describe() if self.superclass is not None else None,
-                         "scope": self.scope.describe(),
+                         "scope": self.scope.describe(), "place": self._place_said(),
                          "signup": self.signup_status(), "app": self.describe()}
         if path == "/api/users" and method == "GET":
             self._require(handler)
@@ -707,6 +877,8 @@ class LoginApp(App):
                 raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
             self.log(f"login: user {user.name} created")
             return 201, user.as_dict()
+        if path == PLUGINS_PATH or path.startswith(PLUGINS_PATH + "/"):  # its plugins (0.18.0)
+            return self._plugin_route(handler, method, path, body)
         if path == "/api/sign-in/secret" and method == "POST":
             return self._secret_sign_in(body)
         if path == "/api/signup" and method == "POST":
@@ -894,6 +1066,12 @@ class LoginApp(App):
                 rows.append({"name": r["name"], **{k: str(r.get(k) or "") for k in ("variable", "plugin", "title", "label", "kind", "system")},
                              "secret": bool(r.get("secret"))})
         return rows
+
+    def _place_said(self) -> dict:
+        """Where its users are, for the status: its own folder or the central database it points to (by name), and what
+        is to be said of it; no file is named to someone not signed in."""
+        p = self.place
+        return {"own": p.own, "pointer": dict(p.pointer) if p.pointer else None, "note": p.note}
 
     def _me(self, s: Session) -> dict:
         """The signed-in user for the page: who, since when, their store and the fingerprints of the
