@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.17.7 (2026-11-24)
+
+Preferences and licences in each user's own store (Monday list item 21; the user, 2026-11-19: "preferences, keys,
+licenses all get stored in the individual's login db"; liminal-libs 1.88.0):
+- The vault takes two kinds more, `preference` (the UI's theme, the platform's plugins switched off) and `licence`
+  (one accepted: what, its version and address, when and by whom), each a JSON value, sealed like every pair.
+- `LoginApp.user_login(handler)`: the person at a browser as the library's Login (userlogin.py), for an app that
+  holds this login (liminal-libs App.user_login) and for the login's own frame. One of its own users over their
+  store (`SessionLogin`), a user of another login over theirs, with the session it gave (`RemoteSessionLogin`);
+  neither reads a key as a preference (409), and a store closed under a request (signed out) is a refusal (401), so a
+  reader falls back to the file as with nobody signed in. The session is looked at, never kept alive by it: a page's
+  polls do not hold open a session its user left.
+- So the login's own `GET /api/ui`, and that of an app holding it, answer each browser with its own user's theme,
+  and a second user signed in sees their own.
+
 ## 0.17.6 (2026-11-24)
 
 Codebase on the login's page (Monday list item 15: "Codebase in the login's, the integrator's and the charts' pages

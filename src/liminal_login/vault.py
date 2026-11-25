@@ -17,7 +17,10 @@ from . import crypto
 from .users import CONTROL, now_iso
 
 PAIR_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")  # massive-account-api-key, claude-account-name
-KINDS = ("key", "account", "password", "detail")
+# 0.17.7 (Monday list item 21; the user, 2026-11-19: "preferences, keys, licenses all get stored in the individual's
+# login db"): a preference (the UI's theme, the platform's plugins switched off) and a licence accepted (what, its
+# version, when, by whom), each a JSON value its app reads through the library's Login (setting, keep_setting)
+KINDS = ("key", "account", "password", "detail", "preference", "licence")
 VALUE_MAX = 4096
 
 SCHEMA = """

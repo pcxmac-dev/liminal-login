@@ -384,6 +384,22 @@ class LoginApp(App):
         self._closed(gone)
         return s
 
+    def user_login(self, handler):
+        """The person at the browser of `handler` as the library's Login (0.17.7, Monday list item 21: what an app that
+        holds this login reads and keeps of their preferences and licences: App.user_login): one of this login's own
+        users over their store (SessionLogin), a user of another login over theirs (RemoteSessionLogin); else the
+        frame's (this app's login: none for a login held by an app). The session is looked at, never kept alive by
+        it: the pages' polls do not hold a session open that its user left."""
+        from .userlogin import RemoteSessionLogin, SessionLogin
+
+        token = self._token(handler) if handler is not None else None
+        now = time.monotonic()
+        with self._lock:
+            s = self._sessions.get(token) if token else None
+        if s is not None and now - s.last <= self.session_seconds:
+            return RemoteSessionLogin(self, s) if isinstance(s, RemoteSession) else SessionLogin(self, s)
+        return self.login  # the frame's: none for a login an app holds (that app's own is read then)
+
     def _sweep(self, now: float) -> list:
         """Under the lock: every session idle too long, taken out (the caller closes them once the lock is let go: a
         store's close waits for a request still using it). The review of 2026-11-21, item 26: a session was ended only
