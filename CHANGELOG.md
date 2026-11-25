@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.19.0 (2026-11-25)
+
+Where the users are as a preference, and a local fallback (the user, 2026-11-25: "sqlite for now, but the user
+preferences should allow for selecting which kind of database, and it's location (URL) file:// too"; "if the
+preference is not locatable, allow for a local fallback, but the location is selectable, ~/app/.data (perhaps)"; with
+plugin-login-datastore 0.2.0):
+- A plugin's place may be a kind and a location (`pointer`: `kind`, `url`) and may be its fallback folder
+  (`pointer.fallback`, with a `note` of why): the note is said in the log before where the users are read from, and the
+  status's `place` says `fallback` and the note. The status's pointer leaves out the location (`url`): no file is named
+  to someone not signed in.
+- A place whose users file cannot be opened at a start (its folder cannot be made, the file is not a database) leaves
+  the login on its own folder, said in the log, the status and on the plugin's page, where it stopped the start before.
+- A preferred location kept by a plugin that is not installed here (the datastore's `store`) leaves the login on its
+  own folder, said, as 0.18.0's `pointer` did.
+- A plugin's tab may hold forms (`forms`: a title, a note, its fields, text or a pick, its button and its question):
+  asked on the page as a row's change is, the form's question then the login's own second one, each answered under the
+  form. The datastore's preferred location and fallback folder are two.
+
 ## 0.18.0 (2026-11-25)
 
 The login's plugins, and the first of them, the datastore (Monday list item 12; item 30, step 8; the user, 2026-11-15:

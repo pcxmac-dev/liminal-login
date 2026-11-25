@@ -6,6 +6,7 @@ back, where the users are read from at the next start, and the plugins let go at
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from http.client import HTTPConnection
 
 from liminal_libs import web
@@ -149,7 +150,7 @@ def test_the_next_start_reads_its_users_where_a_plugin_places_them(folder, tmp_p
         assert again.own_users.count() == 0 and again.stores_dir.name == "users.db.stores"
         port = _port(again.start(0))
         assert _call(port, "GET", "/api/status")[1]["place"] == {"own": False, "pointer": {"engine": "sqlite", "instance": "probe"},
-                                                                 "note": ""}
+                                                                 "fallback": False, "note": ""}
         s = _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[1]
         assert s["admin"] is True and again.users.count() == 2 and again.own_users.count() == 0
         me = _call(port, "GET", "/api/me", token=s["token"])[1]
@@ -161,3 +162,58 @@ def test_the_next_start_reads_its_users_where_a_plugin_places_them(folder, tmp_p
         assert alone.place.own and alone.users is alone.own_users
     finally:
         alone.close()
+
+
+class Located(Probe):
+    """A stand-in placing the users by a kind and a location (0.19.0), or in its fallback folder with a note."""
+
+    name = "located"
+
+    def place(self, kept):
+        if not kept.get("file"):
+            return None
+        pointer = {"kind": "sqlite", "url": Path(kept["file"]).as_uri(), "fallback": bool(kept.get("fallback")),
+                   "at": "2026-11-25T00:00:00+00:00", "by": "secret"}
+        return UsersPlace(own=False, users_file=kept["file"], stores=kept["file"] + ".stores", pointer=pointer,
+                          note="its preferred location could not be used at this start: its fallback folder" if kept.get("fallback") else "")
+
+
+def test_a_fallback_place_is_said_in_the_log_and_the_status_and_no_location_is_named_there(folder, tmp_path):
+    fb = tmp_path / "fallback" / "login" / "users.db"
+    app = LoginApp(folder, log=lambda m: None, failure_delay=0, login_plugins=[Located()])
+    app.keep_for("located", {"file": str(fb), "fallback": True})
+    app.close()
+    lines: list[str] = []
+    again = LoginApp(folder, log=lines.append, failure_delay=0, login_plugins=[Located()])
+    try:
+        assert not again.place.own and again.users.path == fb and fb.is_file()
+        assert lines.index("login: its preferred location could not be used at this start: its fallback folder") <             next(i for i, l in enumerate(lines) if "its users are read from its fallback folder" in l)
+        port = _port(again.start(0))
+        st = _call(port, "GET", "/api/status")[1]["place"]
+        assert st == {"own": False, "fallback": True, "note": "its preferred location could not be used at this start: its fallback folder",
+                      "pointer": {"kind": "sqlite", "fallback": True, "at": "2026-11-25T00:00:00+00:00", "by": "secret"}}
+        assert str(tmp_path) not in json.dumps(st)  # no file named to someone not signed in
+    finally:
+        again.close()
+
+
+def test_a_place_that_cannot_be_opened_leaves_the_login_on_its_own_folder(folder, tmp_path):
+    blocker = tmp_path / "a-file"
+    blocker.write_text("not a folder", encoding="utf-8")
+    app = LoginApp(folder, log=lambda m: None, failure_delay=0, login_plugins=[Located()])
+    app.keep_for("located", {"file": str(blocker / "users.db")})  # its folder cannot be made: a file is in the way
+    app.close()
+    lines: list[str] = []
+    again = LoginApp(folder, log=lines.append, failure_delay=0, login_plugins=[Located()])
+    try:
+        assert again.place.own and again.users is again.own_users and again.stores_dir == folder / "users"
+        assert "could not be opened at this start" in again.place.note and again.place.pointer["kind"] == "sqlite"
+        assert any("could not be opened at this start" in l and "its own folder's users are used" in l for l in lines)
+        port = _port(again.start(0))
+        st = _call(port, "GET", "/api/status")[1]["place"]
+        assert st["own"] is True and "could not be opened" in st["note"] and str(tmp_path) not in json.dumps(st)
+        assert _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[1]["admin"] is True
+        assert again.own_users.count() == 1
+    finally:
+        again.close()
+

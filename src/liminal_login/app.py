@@ -93,10 +93,19 @@ CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
 
 
 def _pointer_words(pointer) -> str:
-    """A pointer to a central database in words: engine:instance, or "its own folder"."""
-    if isinstance(pointer, dict) and pointer.get("engine") and pointer.get("instance"):
-        return f"{pointer['engine']}:{pointer['instance']}"
-    return "its own folder"
+    """A pointer in words: a preferred location's kind and URL (0.19.0), engine:instance (0.18.0's), or "its own
+    folder"; its fallback folder when the pointer says the preferred one could not be used."""
+    if not isinstance(pointer, dict):
+        return "its own folder"
+    if pointer.get("fallback"):
+        return "its fallback folder"
+    instance = f"{pointer['engine']}:{pointer['instance']}" if pointer.get("engine") and pointer.get("instance") else ""
+    if pointer.get("url"):
+        return f"{pointer.get('kind') or 'a database'} at {pointer['url']}" + (f" ({instance})" if instance else "")
+    return instance or "its own folder"
+
+
+POINTER_SAID = ("kind", "engine", "instance", "fallback", "at", "by")  # a pointer's parts the status says (no location)
 
 
 def login_dir() -> Path:
@@ -253,7 +262,7 @@ class LoginApp(App):
         # where its users and their keystores are (0.18.0): its own folder, or the central database a plugin points it
         # to, read once as it starts (a change takes the next start)
         self.place = self._users_place()
-        self.users = self.own_users if self.place.own else UserStore(Path(self.place.users_file))
+        self.users = self.own_users if self.place.own else self._open_place()
         self.stores_dir = Path(self.place.stores) if not self.place.own and self.place.stores else self.dir / "users"
         self.mailer = mailer or Mailer(log=self.log, cfg=self.scope.mail_variables())
         self._exchangers: tuple[float, list[str]] | None = None  # the domain's mail record, looked up now and then
@@ -589,7 +598,7 @@ class LoginApp(App):
             kept = self.kept_of(name)
             p = candidates.get(name)
             if p is None:
-                if kept.get("pointer"):
+                if kept.get("pointer") or kept.get("store"):  # 0.18.0's pointer, 0.19.0's preferred location
                     note = (f"{name}, which points this login elsewhere, is not installed here: its own folder's users "
                             "are used")
                     self.log(f"login: {note}")
@@ -605,9 +614,26 @@ class LoginApp(App):
                 self.log(f"login: {note}")
                 return replace(own, pointer=kept.get("pointer") or None, note=note)
             if isinstance(place, UsersPlace) and not place.own and place.users_file:
+                if place.note:  # its fallback folder (0.19.0), and why: said before where it reads them
+                    self.log(f"login: {place.note}")
                 self.log(f"login: its users are read from {_pointer_words(place.pointer)} ({place.users_file})")
                 return place
         return own
+
+    def _open_place(self) -> UserStore:
+        """The users file of the place a plugin gave, opened (0.19.0): one that cannot be opened (its folder cannot be
+        made, the file is not a database) leaves the login on its own folder, said, as a place that cannot be used."""
+        try:
+            return UserStore(Path(self.place.users_file))
+        except Exception as e:  # noqa: BLE001 - OSError, sqlite3's: its own folder, said
+            # the note is the status's too: the place's words and the error's in the log alone (no file named there)
+            note = f"its users file could not be opened at this start ({type(e).__name__}): its own folder's users are used"
+            self.log(f"login: {_pointer_words(self.place.pointer)} ({self.place.users_file}) could not be opened at this "
+                     f"start ({type(e).__name__}: {e}): its own folder's users are used")
+            own = self.dir
+            self.place = UsersPlace(own=True, users_file=str(own / "users.db"), stores=str(own / "users"), folder=str(own),
+                                    pointer=dict(self.place.pointer) if self.place.pointer else None, note=note)
+            return self.own_users
 
     def current_place(self) -> UsersPlace:
         """Where its users are now, with their number and names (no more of them)."""
@@ -1071,7 +1097,9 @@ class LoginApp(App):
         """Where its users are, for the status: its own folder or the central database it points to (by name), and what
         is to be said of it; no file is named to someone not signed in."""
         p = self.place
-        return {"own": p.own, "pointer": dict(p.pointer) if p.pointer else None, "note": p.note}
+        pointer = {k: p.pointer[k] for k in POINTER_SAID if k in p.pointer} if p.pointer else None
+        return {"own": p.own, "pointer": pointer or None, "fallback": bool(p.pointer and p.pointer.get("fallback")),
+                "note": p.note}
 
     def _me(self, s: Session) -> dict:
         """The signed-in user for the page: who, since when, their store and the fingerprints of the

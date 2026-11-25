@@ -190,46 +190,76 @@
       wireActs(p, shown, me);
     } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   }
-  // what a plugin's tab shows: its title and note, its facts, its tables (a row's `act`: a change asked in the row)
+  // what a plugin's tab shows: its title and note, its facts, its forms (0.19.0: a change made of fields, asked as a
+  // row's is), its tables (a row's `act`: a change asked in the row)
+  const ASKS = '<span class="ask" hidden><span class="words"></span> <button type="button" class="yes accent">Yes</button><button type="button" class="no">No</button></span>';
+  function formHtml(f, fi) {
+    const fields = (f.fields || []).map((x, xi) => {
+      const id = `pf${fi}_${xi}`;
+      const input = x.type === 'select'
+        ? `<select id="${id}" name="${esc(x.key)}">${(x.options || []).map((o) => `<option value="${esc(o.value)}"${o.value === x.value ? ' selected' : ''}>${esc(o.title || o.value)}</option>`).join('')}</select>`
+        : `<input id="${id}" name="${esc(x.key)}" type="text" class="mono" ${kb('plain')} spellcheck="false" maxlength="1024" value="${esc(x.value || '')}" placeholder="${esc(x.placeholder || '')}">`;
+      return `<div class="field${x.type === 'select' ? '' : ' wide'}"><label for="${id}">${esc(x.title || x.key)}</label>${input}</div>`;
+    }).join('');
+    return `<h2>${esc(f.title || '')}</h2>${f.note ? `<p class="muted">${esc(f.note)}</p>` : ''}
+      <form class="plugin-form" data-f="${fi}">${fields}<div class="tools"><span class="acts"><button type="submit" class="accent">${esc(f.label || 'Change it')}</button></span>${ASKS}</div></form>`;
+  }
   function pageHtml(d) {
     d = d || {};
     const facts = (d.facts || []).map((f) => `<dt>${esc(f.label)}</dt><dd${f.mono ? ' class="mono"' : ''}>${esc(f.value)}</dd>`).join('');
+    const forms = (d.forms || []).map(formHtml).join('');
     const tables = (d.tables || []).map((t, ti) => {
       const cols = t.columns || [];
       const rows = (t.rows || []).map((r, ri) => `<tr>${cols.map((c) => `<td${c.mono ? ' class="mono"' : ''}>${esc(r[c.key])}</td>`).join('')}
         <td class="tools">${r.act ? `<span class="acts"><button type="button" class="act" data-t="${ti}" data-r="${ri}">${esc(r.act.label)}</button></span>
-          <span class="ask" hidden><span class="words"></span> <button type="button" class="yes accent">Yes</button><button type="button" class="no">No</button></span>` : ''}</td></tr>`).join('');
+          ${ASKS}` : ''}</td></tr>`).join('');
       return `<h2>${esc(t.title || '')}</h2>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ''}${rows ? `<table class="list plugin-table"><thead><tr>${cols.map((c) => `<th>${esc(c.title || '')}</th>`).join('')}<th></th></tr></thead><tbody>${rows}</tbody></table>`
         : `<p class="muted">${esc(t.empty || 'Nothing here.')}</p>`}`;
     }).join('');
     shownPage = d;
-    return `${d.title ? `<h2>${esc(d.title)}</h2>` : ''}${d.note ? `<p class="muted">${esc(d.note)}</p>` : ''}${facts ? `<dl class="facts">${facts}</dl>` : ''}${tables}<p id="actErr" class="error"></p>`;
+    return `${d.title ? `<h2>${esc(d.title)}</h2>` : ''}${d.note ? `<p class="muted">${esc(d.note)}</p>` : ''}${facts ? `<dl class="facts">${facts}</dl>` : ''}${forms}${tables}<p id="actErr" class="error"></p>`;
   }
   let shownPage = null;
   // a change asked in its row: the row's question first, then the server's own second question (a refusal naming the
-  // argument that accepts it), each answered in the row; nothing is sent before the first Yes
+  // argument that accepts it), each answered in the row; nothing is sent before the first Yes. A form's change (0.19.0)
+  // is its fields' values, asked the same way under the form
   function wireActs(p, tab, me) {
     main.querySelectorAll('button.act').forEach((b) => {
-      const tr = b.closest('tr'), acts = tr.querySelector('.acts'), ask = tr.querySelector('.ask'), words = ask.querySelector('.words');
       const row = ((shownPage.tables || [])[+b.dataset.t].rows || [])[+b.dataset.r];
-      let sent = { ...(row.act.body || {}), confirm: true };
-      const asking = (on, said) => { acts.hidden = on; ask.hidden = !on; if (said !== undefined) words.textContent = said; if (on) focusFirst(ask.querySelector('.no')); };
-      b.addEventListener('click', () => { sent = { ...(row.act.body || {}), confirm: true }; asking(true, row.act.ask || 'Change it?'); });
-      ask.querySelector('.no').addEventListener('click', () => asking(false));
-      ask.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); asking(false); } });
-      ask.querySelector('.yes').addEventListener('click', async () => {
-        $('actErr').textContent = '';
-        try {
-          const r = await fetch(`api/login-plugins/${encodeURIComponent(p.name)}/${encodeURIComponent(tab)}`,
-            { method: 'POST', headers: WRITE, body: JSON.stringify(sent), credentials: 'same-origin' });
-          let d = null;
-          try { d = await r.json(); } catch (e) { d = null; }
-          if (r.status === 409 && d && d.accept) { sent = { ...sent, [d.accept]: true }; asking(true, d.error); return; }
-          if (!r.ok) { asking(false); $('actErr').textContent = (d && d.error) || `the login answered ${r.status}`; return; }
-          showPlugin(p, me);
-        } catch (e) { asking(false); $('actErr').textContent = e.message; }
+      const begin = asker(p, tab, me, b.closest('tr'));
+      b.addEventListener('click', () => begin(row.act.body || {}, row.act.ask || 'Change it?'));
+    });
+    main.querySelectorAll('form.plugin-form').forEach((form) => {
+      const f = (shownPage.forms || [])[+form.dataset.f] || {};
+      const begin = asker(p, tab, me, form);
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const body = {};
+        (f.fields || []).forEach((x) => { const el = form.elements[x.key]; if (el) body[x.key] = el.value.trim(); });
+        begin(body, f.ask || 'Change it?');
       });
     });
+  }
+  // the question and its answers in one place (a row, a form): `begin(body, said)` asks it; nothing is sent before Yes
+  function asker(p, tab, me, place) {
+    const acts = place.querySelector('.acts'), ask = place.querySelector('.ask'), words = ask.querySelector('.words');
+    let sent = { confirm: true };
+    const asking = (on, said) => { acts.hidden = on; ask.hidden = !on; if (said !== undefined) words.textContent = said; if (on) focusFirst(ask.querySelector('.no')); };
+    ask.querySelector('.no').addEventListener('click', () => asking(false));
+    ask.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); asking(false); } });
+    ask.querySelector('.yes').addEventListener('click', async () => {
+      $('actErr').textContent = '';
+      try {
+        const r = await fetch(`api/login-plugins/${encodeURIComponent(p.name)}/${encodeURIComponent(tab)}`,
+          { method: 'POST', headers: WRITE, body: JSON.stringify(sent), credentials: 'same-origin' });
+        let d = null;
+        try { d = await r.json(); } catch (e) { d = null; }
+        if (r.status === 409 && d && d.accept) { sent = { ...sent, [d.accept]: true }; asking(true, d.error); return; }
+        if (!r.ok) { asking(false); $('actErr').textContent = (d && d.error) || `the login answered ${r.status}`; return; }
+        showPlugin(p, me);
+      } catch (e) { asking(false); $('actErr').textContent = e.message; }
+    });
+    return (body, said) => { $('actErr').textContent = ''; sent = { ...body, confirm: true }; asking(true, said); };
   }
 
   // -- signed out: the way in, or sign in with a password, or sign up ---------------------------------------------

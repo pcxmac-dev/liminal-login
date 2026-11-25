@@ -181,10 +181,17 @@ secret user), their own keystore by pair names, kinds and dates (never a value, 
 login keeps its users. A change on a tab only the admin may change is refused to anyone else before the plugin is
 asked. What a plugin keeps is kept in the login's own folder's users file (`settings`, `plugin:<name>`).
 
-The datastore's Global tab may point the login at one central user database, a SQLite instance of the platform's
-Databases section: confirmed twice, refused for an instance that holds anything but a login's users and whenever there
-are users on both sides. The login reads its users and keystores from there from its next start; its own folder's file
-keeps its own settings, so it can be pointed back. Moving users is not done.
+The datastore's Global tab keeps where the login's users are as a preference (0.19.0, with plugin-login-datastore
+0.2.0): a kind of database and its location as a URL (`file:///...` for a SQLite file or folder; a PostgreSQL, MariaDB,
+MongoDB or DuckDB location is kept but answered "not supported yet": the login's stores are SQLite only), an instance of
+the platform's Databases section filling it in, and a local fallback folder (`app/.data` in the home folder unless
+another is kept) used when the preferred location cannot be used at a start. Changed by the admin alone, confirmed
+twice, refused for a location that holds anything but a login's users and whenever there are users on both sides. The
+login reads its users and keystores from there from its next start; its own folder's file keeps its own settings, so it
+can be pointed back. With no preferred location ever kept nothing changes: its users stay in its own folder. Moving
+users is never done, by the page or at a start. A start in the fallback folder, or on its own folder because a place
+could not be opened, is said in the log, the status (`place.fallback`, `place.note`; the status never names a location)
+and on the Global tab.
 
 Inherited today by the charts app (liminal-charts): its front serves this page under `/login/`, draws the
 user icon at the foot of its rail and, when nothing answers at `LIMINAL_LOGIN_URL` (8795), starts this app
