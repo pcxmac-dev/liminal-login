@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.20.2 (provisional)
+
+The right-hand menu by the library's page standard (Monday list item 31; liminal-libs 1.105.0's docs/PAGES.md and
+side.js): the view picked in the list (your account, a plugin, Codebase, This app) at the panel's top, and the row
+picked in the middle told in full under it.
+- Your account: your store's facts on top; a pair picked is told by its name, its kind, its label, when it was kept and
+  which plugins here ask for it. Never its value: the pick is made of what the page was given, not of its cells, so a
+  value revealed in its row stays there. A pair a plugin asks for is told by its plugin, its variable and whether it is
+  kept.
+- A plugin's tables: a row told by the table's `details` where the plugin gives them, else by its cells.
+- Codebase: the side on top, the repository picked under it.
+- A library without side.js (before 1.105.0): the side drawn whole, as before. No route changed.
+
 ## 0.20.1 (2026-11-26)
 
 The login's own External and Internal API (Monday list item 17; the user, 2026-11-16: "for all apps, and all plugins,

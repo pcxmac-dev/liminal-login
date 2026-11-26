@@ -119,7 +119,7 @@ def test_the_page_lists_the_account_and_codebase_and_hands_codebase_the_two_pane
     # 0.20.1: and for This app, the login's own two views (tests/test_api_views.py)
     assert "const listed = !embedded && (withCodebase || mayOwn || plugins.length > 0);" in page
     assert "main.innerHTML = userCard(me) + storeFacts(me) + rest;" in page
-    assert "columns(userCard(me) + rest, storeFacts(me), withCodebase);" in page
+    assert "columns(userCard(me) + rest, storeFacts(me), withCodebase, 'login:account');" in page  # 0.20.2: its scope
     assert "plugins = embedded ? [] : ((await api('GET', 'api/login-plugins')).plugins || []);" in page
     assert "api/app/apis?plugin=${encodeURIComponent(p.name)}" in page  # its External and Internal API, the frame's
     html = (LoginApp.STATIC / "index.html").read_text(encoding="utf-8")

@@ -86,13 +86,38 @@
   // library's own script (codebase.js), as the platform draws it. Held in another app's page (?embedded=1) the account
   // alone, as before; a library from before 1.59.0 has no codebase.js: the account alone too.
   const C = window.LiminalCodebase || null;
+  // 0.20.2 (Monday list item 31; the library's docs/PAGES.md): the right-hand menu is the library's side.js panel, the
+  // view picked in the list at its top and the row picked in the middle told in full under it. A pair picked is told by
+  // its name, its kind, its label and when it was kept, never its value (the pick is made of what the page was given,
+  // not of its cells: a value revealed in its row stays there). A library without side.js: the side drawn whole
+  const S = window.LiminalSide || null;
+  let sidePanel = null;
+  const pickSpecs = new Map();  // what each row drawn tells when picked, by its key
+  function setSide(scope, html) {
+    const el = $('side');
+    if (!el) return;
+    if (!S) { el.innerHTML = html; return; }
+    sidePanel = S.panel(el, { app: 'login' });
+    sidePanel.tool(scope, html);
+  }
+  function sideRows() {  // the middle's rows picked into the panel, the pick told anew
+    if (!sidePanel || !$('data')) return;
+    S.rows($('data'), { selector: 'tr[data-pick]', panel: sidePanel, describe: (tr, key) => pickSpecs.get(key) || S.fromRow(tr) });
+    sidePanel.refresh((key) => pickSpecs.get(key) || null);
+  }
+  const pickAttr = (key, spec) => {
+    if (!S) return '';
+    if (spec) pickSpecs.set(key, spec);
+    return ` data-pick="${esc(key)}"`;
+  };
   let view = 'account';  // the one picked in the list
   let codebaseShown = false;
   function showCodebase() {
     if (codebaseShown || !C) return;
     codebaseShown = true;
     // the page's own way to ask (relative paths: the login under another app's prefix asks its own, not that app's)
-    C.mount($('data'), $('side'), { get: (path) => api('GET', path.replace(/^\//, '')), send: (path, body) => api('POST', path.replace(/^\//, ''), body) });
+    C.mount($('data'), $('side'), { get: (path) => api('GET', path.replace(/^\//, '')), send: (path, body) => api('POST', path.replace(/^\//, ''), body),
+      panel: sidePanel, scope: 'login:codebase' });  // 0.20.2: the side the panel's top, the repository picked under it
   }
   function leaveCodebase() {
     if (!codebaseShown) return;
@@ -115,10 +140,11 @@
       + `${withCodebase ? item('codebase', 'branch', 'Codebase', 'its repositories, its code, by language') : ''}`
       + `${mayOwn ? item('app', 'sort', 'This app', 'its own External and Internal API') : ''}</nav>`;
   }
-  function columns(data, side, withCodebase = true) {
+  function columns(data, side, withCodebase = true, scope = `login:${view}`) {
     main.classList.add('cols');
     main.innerHTML = `${listHtml(withCodebase)}<section class="app-data" id="data" aria-label="The one picked">${data}</section>`
-      + `<aside class="app-side" id="side" aria-label="Its specifics">${side}</aside>`;
+      + `<aside class="app-side" id="side" aria-label="Its specifics">${S ? '' : side}</aside>`;
+    if (S) setSide(scope, side);  // 0.20.2: the side the panel's top
     main.querySelectorAll('#list [data-view]').forEach((b) => b.addEventListener('click', () => {
       if (b.dataset.view === view) return;
       view = b.dataset.view;
@@ -155,9 +181,10 @@
     if (view !== 'account') view = 'account';  // a plugin that is gone, or the code base where it is not shown
     const pairs = (await api('GET', 'api/pairs')).pairs;
     const known = (await api('GET', 'api/pairs/known')).known;  // the pairs the plugins here ask for
+    pickSpecs.clear();
     const rest = pairsTable(pairs, known) + knownTable(known) + addForm(known) + changeForm(me);
     if (!listed) { flat(); main.innerHTML = userCard(me) + storeFacts(me) + rest; }  // one column, in the order it always had
-    else columns(userCard(me) + rest, storeFacts(me), withCodebase);
+    else { columns(userCard(me) + rest, storeFacts(me), withCodebase, 'login:account'); sideRows(); }
     wire(me);
   }
 
@@ -176,9 +203,9 @@
     titled(`${p.title || p.name}: ${(list.find((t) => t.id === shown) || {}).title || ''}`);
     const data = $('data'), side = $('side');
     const own = (p.tabs || []).find((t) => t.id === shown);
-    side.innerHTML = `<h2>${esc(p.title || p.name)}</h2><p class="muted">${esc(p.about || '')}</p>
+    setSide(`login:plugin:${p.name}/${shown}`, `<h2>${esc(p.title || p.name)}</h2><p class="muted">${esc(p.about || '')}</p>
       <dl class="facts"><dt>Version</dt><dd>${esc(p.version || '')}</dd><dt>You</dt><dd>${esc(me.name)}${me.admin ? " (this login's admin)" : ''}</dd>
-      ${own && own.admin ? `<dt>This tab</dt><dd>${me.admin ? 'you may change it' : "only this login's admin, its secret user, may change it"}</dd>` : ''}</dl>`;
+      ${own && own.admin ? `<dt>This tab</dt><dd>${me.admin ? 'you may change it' : "only this login's admin, its secret user, may change it"}</dd>` : ''}</dl>`);
     data.innerHTML = `<h1>${esc(p.title || p.name)}</h1>${tabsHtml(list, shown)}<div id="pluginBody"><p class="muted">Asking…</p></div>`;
     data.querySelectorAll('[data-api-tab]').forEach((b) => b.addEventListener('click', () => {
       pluginTab[p.name] = b.dataset.apiTab;
@@ -194,6 +221,7 @@
       }
       body.innerHTML = pageHtml(await api('GET', `api/login-plugins/${encodeURIComponent(p.name)}/${encodeURIComponent(shown)}`));
       wireActs(p, shown, me);
+      sideRows();  // 0.20.2: a row of its tables told in full under the tool
     } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   }
   // -- This app: the login's own two views (0.20.1), External API then Internal API beside its title, asked only while
@@ -208,7 +236,7 @@
     const data = $('data'), side = $('side');
     const facts = (d) => `<dl class="facts">${d && d.title ? `<dt>App</dt><dd>${esc(d.title)}</dd>` : ''}${d && d.api ? `<dt>Its API</dt><dd>${esc(d.api)}</dd>` : ''}
       ${d && d.url ? `<dt>At</dt><dd class="mono">${esc(d.url)}</dd>` : ''}<dt>You</dt><dd>${esc(me.name)}${me.admin ? " (this login's admin)" : ''}</dd></dl>`;
-    side.innerHTML = `<h2>This app</h2><p class="muted">The login itself: what its code associates with, and what it offers its plugins and the apps that hold it.</p><div id="ownFacts">${facts(null)}</div>`;
+    setSide(`login:own:${ownTab}`, `<h2>This app</h2><p class="muted">The login itself: what its code associates with, and what it offers its plugins and the apps that hold it.</p><div id="ownFacts">${facts(null)}</div>`);
     data.innerHTML = `<h1>This app</h1>${tabsHtml(list, ownTab)}<div id="ownBody"><p class="muted">Asking…</p></div>`;
     data.querySelectorAll('[data-api-tab]').forEach((b) => b.addEventListener('click', () => {
       ownTab = b.dataset.apiTab;
@@ -245,9 +273,17 @@
     d = d || {};
     const facts = (d.facts || []).map((f) => `<dt>${esc(f.label)}</dt><dd${f.mono ? ' class="mono"' : ''}>${esc(f.value)}</dd>`).join('');
     const forms = (d.forms || []).map(formHtml).join('');
+    pickSpecs.clear();
     const tables = (d.tables || []).map((t, ti) => {
       const cols = t.columns || [];
-      const rows = (t.rows || []).map((r, ri) => `<tr>${cols.map((c) => `<td${c.mono ? ' class="mono"' : ''}>${esc(r[c.key])}</td>`).join('')}
+      // 0.20.2: a row picked is told by its table's details where the plugin gives them, else by its cells; keyed by
+      // what it is (its details' key, its own key or id, else its first column's words), not by where it is
+      const keyOf = (r, ri) => {
+        const d = Array.isArray(t.details) ? t.details[ri] : null;
+        return `${t.title || ti}|${(d && d.key) || r.key || r.id || (cols[0] ? r[cols[0].key] : ri)}`;
+      };
+      const detailOf = (ri) => (Array.isArray(t.details) && t.details[ri] && typeof t.details[ri] === 'object' ? t.details[ri] : null);
+      const rows = (t.rows || []).map((r, ri) => `<tr${t.pick === false ? '' : pickAttr(keyOf(r, ri), detailOf(ri))}>${cols.map((c) => `<td${c.mono ? ' class="mono"' : ''}>${esc(r[c.key])}</td>`).join('')}
         <td class="tools">${r.act ? `<span class="acts"><button type="button" class="act" data-t="${ti}" data-r="${ri}">${esc(r.act.label)}</button></span>
           ${ASKS}` : ''}</td></tr>`).join('');
       return `<h2>${esc(t.title || '')}</h2>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ''}${rows ? `<table class="list plugin-table"><thead><tr>${cols.map((c) => `<th>${esc(c.title || '')}</th>`).join('')}<th></th></tr></thead><tbody>${rows}</tbody></table>`
@@ -530,7 +566,8 @@
     // the login knows no plugin of its own (0.13.0): the pairs a plugin asks for are listed only when an app inherits it
     // and says which (knownTable)
     if (!pairs.length) return `<h2>Your keys and accounts</h2><p class="muted">No pairs yet. Add one below: a pair is named after the variable it stands for, <code>some-api-key</code> for <code>SOME_API_KEY</code>${known.length ? `; the pairs the plugins of ${esc(forTitle)} ask for are listed below` : ''}.</p>`;
-    const rows = pairs.map((p) => `<tr data-name="${esc(p.name)}">
+    const asking = (name) => known.filter((k) => k.name === name).map((k) => k.title || k.plugin).join(', ');
+    const rows = pairs.map((p) => `<tr data-name="${esc(p.name)}"${pickAttr(`pair:${p.name}`, pairSpec(p, asking(p.name)))}>
         <td class="mono">${esc(p.name)}</td><td><span class="kind">${esc(p.kind)}</span></td><td>${esc(p.label)}</td>
         <td class="muted">${esc(when(p.updatedAt))}</td>
         <td class="value"><span class="masked">••••••••</span></td>
@@ -540,11 +577,20 @@
     return `<h2>Your keys and accounts</h2><table class="list pairs"><thead><tr><th>Name</th><th>Kind</th><th>Label</th><th>Updated</th><th>Value</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  // a pair picked (0.20.2): what the page was given of it, never its value: the value is asked only by its row's Reveal
+  function pairSpec(p, asking) {
+    return { title: p.name, sub: p.label || '', facts: [['Kind', p.kind], ['Label', p.label], ['Updated', when(p.updatedAt)],
+      ['Value', 'masked: Reveal in its row shows it there'], ['Asked for by', asking || 'no plugin here']].filter(([, v]) => v) };
+  }
+  function knownSpec(k) {
+    return { title: k.name, sub: k.title || k.plugin, facts: [['Plugin', k.title || k.plugin], ['For', k.label], ['Variable', k.variable],
+      ['Kind', k.kind], ['Kept', k.set ? 'yes' : 'not yet: Add fills the form below']].filter(([, v]) => v) };
+  }
   function knownTable(known) {
     // the pairs the plugins of the app that inherits this login ask for, as that app said (named by their variables:
     // the user, 2026-11-06, "By the variables"), each set already or one click from the form below; none on its own
     if (!known.length) return '';
-    const rows = known.map((k) => `<tr>
+    const rows = known.map((k) => `<tr${pickAttr(`known:${k.plugin}|${k.name}`, knownSpec(k))}>
         <td>${esc(k.title || k.plugin)}</td><td class="mono">${esc(k.name)}</td><td>${esc(k.label)}</td>
         <td class="muted mono">${esc(k.variable)}</td>
         <td>${k.set ? '<span class="kind">set</span>' : `<button type="button" class="use" data-name="${esc(k.name)}" data-kind="${esc(k.kind)}" data-label="${esc(k.label)}" title="Fill the form below with this pair">Add</button>`}</td></tr>`).join('');
