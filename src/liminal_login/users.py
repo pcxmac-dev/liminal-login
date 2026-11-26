@@ -27,8 +27,9 @@ EMAIL_MAX = 254
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 CODE_MINUTES = 15.0  # a code's life
-CODE_TRIES = 5  # wrong codes before the sign-up is dropped
-RESEND_SECONDS = 60.0  # no new code sooner than this
+CODE_TRIES = 5  # wrong codes before a code is spent: its sign-up then waits for a new one
+RESEND_SECONDS = 60.0  # no new code sooner than this after the last went out, or after its tries were spent
+NEW_CODE = f"a new one can be sent in {int(RESEND_SECONDS)} seconds"  # said with the wrong code that spends a code's tries
 COMPLETE_MINUTES = 30.0  # after the code came back right: this long to choose the name and the password
 
 SCHEMA = """
@@ -49,7 +50,7 @@ CREATE TABLE IF NOT EXISTS signups (
     code_salt BLOB NOT NULL,
     code_hash BLOB NOT NULL,        -- the code mailed, as a salted hash
     tries INTEGER NOT NULL DEFAULT 0,
-    sent_at TEXT NOT NULL,
+    sent_at TEXT NOT NULL,          -- when its code went out; its tries spent, when the last was (0.20.0)
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     verified_at TEXT,               -- when the code came back right
@@ -76,12 +77,19 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+class WrongCode(ValueError):
+    """A code typed that is not the one mailed: a try spent. Told apart from the other refusals of a code (no sign-up
+    under way, a code expired or spent) because it is the one that was a guess: the app counts it as it counts a wrong
+    password (throttle.py)."""
+
+
 def _refuse_again(row, sooner_than: float) -> None:
     """Whether a sign-up under way may be begun again or given a new code (the review of 2026-11-21, item 26): anyone
     could begin one again at once, with no time check, so the limit on new codes was nothing, a stranger could send
     codes to an address as fast as they liked, and a sign-up already verified (its name and password being chosen) was
     wiped, its proof made worthless. Now one that has expired may always begin again; one verified never, until it
-    expires; and a new code waits `sooner_than` seconds after the last. ValueError says which."""
+    expires; and a new code waits `sooner_than` seconds after the last went out, or, its tries spent, after the last
+    of them (0.20.0: `sent_at` is moved there and the sign-up kept that long, verify_signup). ValueError says which."""
     now = datetime.now(timezone.utc)
     if datetime.fromisoformat(row["expires_at"]) < now:
         return
@@ -89,6 +97,9 @@ def _refuse_again(row, sooner_than: float) -> None:
         raise ValueError("that address was verified already and its account is being made: finish that, "
                          "or ask again once it has expired")
     if (now - datetime.fromisoformat(row["sent_at"])).total_seconds() < sooner_than:
+        if row["tries"] >= CODE_TRIES:
+            raise ValueError(f"the tries of the last code are spent, and a new one goes out no sooner than "
+                             f"{int(sooner_than)} seconds after the last of them: ask again then")
         raise ValueError(f"a code went out less than {int(sooner_than)} seconds ago: look for it, then ask again")
 
 
@@ -450,7 +461,7 @@ class UserStore:
         now = now_iso()
         with self._lock:
             self._refuse_taken(None, email)
-            r = self._con.execute("SELECT sent_at, expires_at, verified_at FROM signups WHERE email = ?", (email,)).fetchone()
+            r = self._con.execute("SELECT tries, sent_at, expires_at, verified_at FROM signups WHERE email = ?", (email,)).fetchone()
             if r is not None:
                 _refuse_again(r, sooner_than)
             self._con.execute("INSERT OR REPLACE INTO signups (email, code_salt, code_hash, tries, sent_at, expires_at, created_at) "
@@ -470,8 +481,8 @@ class UserStore:
         return n > 0
 
     def signup(self, email) -> dict | None:
-        """The sign-up under way for `email`: when its code was sent and expires, the tries made,
-        whether the code came back right; None when there is none."""
+        """The sign-up under way for `email`: when its code was sent (its tries spent: when the last
+        was) and expires, the tries made, whether the code came back right; None when there is none."""
         try:
             email = clean_email(email)
         except ValueError:
@@ -487,7 +498,7 @@ class UserStore:
         not expired (_refuse_again)."""
         email = clean_email(email)
         with self._lock:
-            r = self._con.execute("SELECT sent_at, expires_at, verified_at FROM signups WHERE email = ?", (email,)).fetchone()
+            r = self._con.execute("SELECT tries, sent_at, expires_at, verified_at FROM signups WHERE email = ?", (email,)).fetchone()
             if r is None:
                 raise ValueError("no sign-up is under way for that address: start one first")
             _refuse_again(r, sooner_than)
@@ -501,8 +512,12 @@ class UserStore:
 
     def verify_signup(self, email, code) -> str:
         """The code typed: right, the address is verified and the proof for the next step is
-        returned; wrong, a try is spent (ValueError), and after CODE_TRIES or past the expiry the
-        sign-up is dropped (ValueError says to start again)."""
+        returned; wrong, a try is spent (WrongCode, a ValueError). After CODE_TRIES the code is spent:
+        it is no longer compared, and its sign-up is kept, for RESEND_SECONDS from that last try at the
+        least, so no new code follows sooner (_refuse_again), never dropped (0.20.0; the last check of
+        LOG-C1's fix, 2026-11-25: dropped at the fifth wrong code, a sign-up was begun again at once,
+        five more tries with each new code and no minute between them). Past the expiry the sign-up is
+        dropped (ValueError says to ask again)."""
         email = clean_email(email)
         with self._lock:
             r = self._con.execute("SELECT * FROM signups WHERE email = ?", (email,)).fetchone()
@@ -512,15 +527,21 @@ class UserStore:
                 self._con.execute("DELETE FROM signups WHERE email = ?", (email,))
                 self._con.commit()
                 raise ValueError("that code has expired: ask for a new one")
+            if r["tries"] >= CODE_TRIES:  # spent: not a guess, whatever was typed
+                raise ValueError(f"the tries of that code are spent: a new one can be sent {int(RESEND_SECONDS)} "
+                                 "seconds after the last of them")
             if not crypto.same(crypto.code_hash(code, r["code_salt"]), r["code_hash"]):
                 tries = r["tries"] + 1
                 if tries >= CODE_TRIES:
-                    self._con.execute("DELETE FROM signups WHERE email = ?", (email,))
+                    # spent: its minute starts again here (`sent_at`), and the sign-up lives that long at the least
+                    # (`expires_at`), so the next code waits RESEND_SECONDS from this try however late it came
+                    self._con.execute("UPDATE signups SET tries = ?, sent_at = ?, expires_at = MAX(expires_at, ?) "
+                                      "WHERE email = ?", (tries, now_iso(), _at(RESEND_SECONDS / 60), email))
                     self._con.commit()
-                    raise ValueError("that was the last try for that code: ask for a new one")
+                    raise WrongCode(f"that was the last try for that code: {NEW_CODE}")
                 self._con.execute("UPDATE signups SET tries = ? WHERE email = ?", (tries, email))
                 self._con.commit()
-                raise ValueError(f"wrong code ({CODE_TRIES - tries} tries left)")
+                raise WrongCode(f"wrong code ({CODE_TRIES - tries} tries left)")
             token = crypto.new_token()
             self._con.execute("UPDATE signups SET verified_at = ?, token_hash = ?, expires_at = ? WHERE email = ?",
                               (now_iso(), crypto.token_hash(token), _at(COMPLETE_MINUTES), email))

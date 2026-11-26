@@ -81,6 +81,8 @@ def _not_this_machines_mail_account(monkeypatch):
     monkeypatch.setattr(mail, "_saved", lambda: {})
     monkeypatch.setattr(mail, "_secret", lambda name: None)
     monkeypatch.setenv("LIMINAL_LOGIN_CFG", "")  # nor this machine's login file: a test's login is local to its folder
+    monkeypatch.delenv("LIMINAL_LOGIN_SCOPE", raising=False)  # nor a scope said over it (docker/compose.yaml's)
+    monkeypatch.delenv("LIMINAL_LOGIN_SIGNUP", raising=False)  # nor its word on sign-up by email
     monkeypatch.setattr(Scope, "find", classmethod(lambda cls, start=None, env=None: None))
     for v in mail.ALL_VARS:
         monkeypatch.delenv(v, raising=False)

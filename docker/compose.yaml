@@ -1,9 +1,19 @@
 # A remote login for Liminal: the login app alone (Dockerfile) and its https front (Caddyfile), for the platform to set
 # up on the Docker engine it picks (the user, 2026-11-10: "the platform app will be able to setup docker instances";
 # "just prepare for using docker on platform as a way to login remotely with only the login-app"). By hand, from this
-# folder: `docker compose up -d --build`. Other logins then reach its users as name@<its domain>: their [remotes] names
-# https://<LIMINAL_REMOTE_HOST>:<LIMINAL_REMOTE_PORT>, and LIMINAL_LOGIN_CA trusts the front's own authority, copied out
-# once with `docker compose cp front:/data/caddy/pki/authorities/local/root.crt ./front-root.crt`.
+# folder: `docker compose up -d --build`, then the first user, `docker compose exec login liminal-login user add NAME`.
+# Set where it is deployed (the environment, or an .env file beside this one): LIMINAL_REMOTE_HOST, the https host the
+# front answers at and the login's own domain (localhost unless said); LIMINAL_REMOTE_PORT, the port (8443); and
+# LIMINAL_REMOTE_BIND, the address the port is published on: this machine alone (127.0.0.1) unless it names a wider
+# one (0.0.0.0: every interface; or one address, a LAN's or a tailnet's; an IPv6 one in brackets). Other logins then
+# reach its users as name@<LIMINAL_REMOTE_HOST>: their [remotes] names https://<LIMINAL_REMOTE_HOST>:<LIMINAL_REMOTE_PORT>,
+# and LIMINAL_LOGIN_CA trusts the front's own authority, copied out once with
+# `docker compose cp front:/data/caddy/pki/authorities/local/root.crt ./front-root.crt`.
+# No account is made by a mailed code unless liminal-login.cfg, beside this file, says `signup = open` (the README's
+# Docker steps say what that means).
+# The login counts failed sign-ins by the address the front was reached from. Published on 127.0.0.1, behind Docker
+# Desktop or rootless Docker, or behind a tunnel on the host, that is one address for everyone, and its 30 from one
+# address are then everyone's together (the README's Docker steps).
 name: liminal-login-remote
 
 services:
@@ -13,11 +23,19 @@ services:
       dockerfile: docker/Dockerfile
       additional_contexts:
         libs: ../../common          # liminal-libs' checkout beside this one (source/liminal/common)
+    environment:
+      # a domain's login, the front's host (LOG-C1): no way in without a password, no account without a session. The
+      # liminal-login command alone reads it, `serve` here and `user add` run inside: the same users, in one folder
+      LIMINAL_LOGIN_SCOPE: "https://${LIMINAL_REMOTE_HOST:-localhost}"
+      # no sign-up by email unless liminal-login.cfg opens it (`signup = open` under its [login]): said here for a copy
+      # of that file from before the line, on a host with a mail record. It only closes: the file's own line is over it
+      LIMINAL_LOGIN_SIGNUP: "closed"
     volumes:
       - login-data:/data
       - ./liminal-login.cfg:/config/liminal-login.cfg:ro
     ports:
-      - "${LIMINAL_REMOTE_PORT:-8443}:8443"   # the front's port: published from this network, which the front shares
+      # the front's port, published from this network, which the front shares: on this machine alone unless said
+      - "${LIMINAL_REMOTE_BIND:-127.0.0.1}:${LIMINAL_REMOTE_PORT:-8443}:8443"
     restart: unless-stopped
 
   front:

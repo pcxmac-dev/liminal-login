@@ -16,13 +16,17 @@ in a folder of its own here, with its own cookie, the page names it, and the pai
 that app itself, never read from a plugin here. A login run on its own for a superclass (LIMINAL_LOGIN_FOR and its
 title and address, liminal_libs.apps.inherited_by) asks it at its address (GET /api/login/pairs) as before. A sign-up begins with an
 email; a six-digit code goes to it through the user's own mail account (liminal_libs.mail); typed
-back, the name and the password are chosen and the account is made and signed in. Sessions live in
+back, the name and the password are chosen and the account is made and signed in. A domain's login
+takes sign-ups unless its switch closes them (0.20.0: its file's `signup` line, or what its command line
+was told), and a wrong code is counted as a wrong password is (throttle.py). Sessions live in
 memory: a token in the page's cookie and in a client's X-Liminal-Session header, the user's vault
 open for the session's life and closed at sign-out or once idle too long. The routes are the page's
 and the library's LoginClient's."""
 from __future__ import annotations
 
+import configparser
 import json
+import math
 import os
 import re
 import secrets
@@ -36,7 +40,8 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import unquote, urlencode
 
-from liminal_libs import layout
+from liminal_libs import __version__ as LIBS_VERSION
+from liminal_libs import layout, web
 from liminal_libs.apps import (PAIRS_PATH, REMOTES_VAR, SESSION_HEADER, SUPER_TITLE_VAR, SUPER_URL_VAR, SUPER_VAR, App,
                                Refused, Scope, remotes_from)
 from liminal_libs.apps import remote_url as remote_address
@@ -47,7 +52,8 @@ from liminal_libs.web import WRITE_HEADER
 from liminal_libs.apps import asking
 from liminal_libs.sources.plugin import Keystore, LoginPlugin, LoginRefusal, UsersPlace, Viewer
 from . import __version__
-from .users import CODE_MINUTES, DEFAULT_NAME, User, UserStore
+from .throttle import Throttle
+from .users import CODE_MINUTES, DEFAULT_NAME, User, UserStore, WrongCode
 from .vault import PAIR_NAME, KeyPairStore, VaultClosed, store_file
 
 DIR_VAR = "LIMINAL_LOGIN_DIR"  # the login's folder (store/data/login by default): its own users, a superclass's folder each
@@ -86,6 +92,42 @@ NOT_PASSWORDLESS = "only the secret and the default users come in without a pass
 PLUGIN_KEPT = "plugin:"
 PLUGINS_PATH = "/api/login-plugins"  # GET: the login's plugins; /<name>/<tab>: GET its page, POST a change on it
 ADMIN_ONLY = "only this login's admin, its secret user, may change this: anyone signed in sees it"
+# Only at the login's own machine (LOG-C1, 2026-11-23; the user: "The two high ones"): a sign-in without a password and
+# an account made without a session are a program's here, sent from this machine itself and not handed on by a front
+# (liminal_libs.web.from_this_machine). docker/'s front, in the login's own network, connects from 127.0.0.1 as a page
+# here does; it marks what it hands on (X-Liminal-Front), and everyone who reached it signs in with a password.
+NOT_HERE = "nobody comes in without a password but at this login's own machine: sign in with your password"
+NO_SESSION_HERE = "an account is made without a session only at this login's own machine: sign in to add a user"
+FIRST_AT_THE_MACHINE = ("a domain's login makes its first user at its own machine: `liminal-login user add NAME` there "
+                        "(in Docker: `docker compose exec login liminal-login user add NAME`)")
+# The library this login needs, as pyproject.toml says it (a test holds the two together). Only pip checks that floor,
+# and an install made without its dependencies (an editable one of two checkouts) runs whatever they hold: on an older
+# library web has no from_this_machine, and every sign-in answered 500 with the reason in the log alone (the review of
+# LOG-C1's fix, 2026-11-25). Said in words to whoever asks, until the library is the one it needs
+LIBS_FLOOR = "1.98.0"
+LIBS_TOO_OLD = (f"liminal-login {__version__} needs liminal-libs {LIBS_FLOOR} or newer, and this one is {LIBS_VERSION}: "
+                "update the library, then start this app again")
+# Sign-up by email, closed unless turned on (0.20.0; the last check of LOG-C1's fix, 2026-11-25; the user: "Closed
+# unless turned on"). Made a domain's so that it has no user without a password, the Docker login took sign-ups by a
+# mailed code as soon as its host had a mail record, with nothing else set. A domain's login now reads a switch, the
+# `signup` line under its file's [login]: `open`, a code mailed to an address makes an account once the domain has an
+# email server; `closed`, or any other word, none does. A file with no such line leaves it to whoever made the login:
+# the command line hands on LIMINAL_LOGIN_SIGNUP (cli.py; docker/compose.yaml says `closed`), which closes it and
+# never opens it. With neither, a domain's login takes sign-ups when it has an email server, as it always did (the
+# user, 2026-11-06). So only the file's own `signup = open` opens what was closed; and a local login, which has no
+# sign-up by email, reads neither.
+SIGNUP_KEY = "signup"
+SIGNUP_OPEN, SIGNUP_CLOSED = "open", "closed"
+SIGNUP_HOW = ("`signup = open` under [login] in its liminal-login.cfg opens it (read when the login starts); until then "
+              "accounts are made at its machine with `liminal-login user add NAME`")
+SIGNUP_CLOSED_WHY = f"sign-up by email is closed on this login: {SIGNUP_HOW}"
+SIGNUP_NO_WORD_WHY = ("sign-up by email is closed on this login: the `signup` line of its liminal-login.cfg says neither "
+                      f"open nor closed; {SIGNUP_HOW}")
+SIGNUP_UNREAD_WHY = ("sign-up by email is closed on this login: its liminal-login.cfg could not be read again for its "
+                     f"`signup` line; {SIGNUP_HOW}")
+# What a sign-up's code is held back for (0.20.0): a wrong code is counted where a wrong password is (throttle.py), by
+# where it came from and by the address it was mailed to, so the two are said together
+WRONG_CODES = "wrong codes or failed sign-ins"
 CODE_SUBJECT = "Your {title} code"
 CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
              "Type it on the page that asked for it within {minutes:g} minutes. If you did not ask for an "
@@ -124,6 +166,37 @@ def login_dir() -> Path:
     in a repository; the login's own users in it, and a folder in it for each app that inherits it."""
     raw = (os.environ.get(DIR_VAR) or "").strip()
     return Path(raw) if raw else data_dir() / "login"
+
+
+def signup_line(path) -> str | None:
+    """What a login's file says of sign-up by email: the word of `signup` under its [login], trimmed and in lower case
+    (`open`, `closed`, or whatever else is written there); None when it has no such line, or there is no file (`path`
+    None: a scope made in code). The library's Scope keeps no such line (liminal-libs 1.98.0), so the file is read
+    here, as the library reads it. OSError, or configparser's error, when it cannot be read."""
+    if path is None:
+        return None
+    cfg = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=(";", "#"))
+    cfg.optionxform = str  # as liminal_libs.apps.Scope.parse reads the same file
+    cfg.read_string(Path(path).read_text(encoding="utf-8"))
+    login = {k.strip().lower(): v for k, v in cfg["login"].items()} if "login" in cfg else {}
+    return login[SIGNUP_KEY].strip().lower() if SIGNUP_KEY in login else None
+
+
+def keep_signup_line(path, said: str) -> None:
+    """`signup = <said>` put back as the last line of the [login] section of a file the library's Scope has just
+    written (`mail setup`): Scope.text writes no such line, so the file's own word on sign-up went with every write, a
+    `closed` its owner wrote among them."""
+    path = Path(path)
+    lines = path.read_text(encoding="utf-8").split("\n")
+    start = next((i for i, line in enumerate(lines) if line.strip().lower() == "[login]"), None)
+    if start is None:
+        return
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
+    while end > start + 1 and not lines[end - 1].strip():
+        end -= 1  # before the empty line that ends the section
+    lines[end:end] = ["; sign-up by email on a domain's login: open (a code mailed to an address makes an account) or closed",
+                      f"{SIGNUP_KEY} = {' '.join(str(said).split())}"]  # on one line, whatever was written
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 MX_SECONDS = 600.0  # a domain's mail record is looked up again after this long
@@ -243,7 +316,8 @@ class LoginApp(App):
 
     def __init__(self, directory: Path | None = None, log=print, failure_delay: float = FAILURE_DELAY_S, mailer=None,
                  superclass: Superclass | str | None = None, scope: Scope | None = None, remotes: dict | None = None,
-                 port: int | None = None, login_plugins=None):
+                 port: int | None = None, login_plugins=None, throttle: Throttle | None = None,
+                 signup: str | None = None):
         super().__init__(log)
         # its plugins (0.18.0): those given (a test's), else the registry's login plugins, attached when first asked for
         self._given_plugins = list(login_plugins) if login_plugins is not None else None
@@ -255,9 +329,17 @@ class LoginApp(App):
         self.superclass = superclass_from(superclass)
         # What this login is tied to (liminal_libs.apps.scope; the user, 2026-11-06: "login apps tied to domains
         # (with email server) or local (file://project/folder)"): the scope given, else the file found (not
-        # when the users' folder is given outright: a test's), else local to the folder, else to the workspace
+        # when the users' folder is given outright: a test's), else local to the folder, else to the workspace. No
+        # variable says the scope over these: LIMINAL_LOGIN_SCOPE is the command line's alone (cli.scoped; the user,
+        # 2026-11-24), so the login an app holds is never made another's by one left set on its machine
         self.scope = scope or (Scope.find() if directory is None else None) \
             or Scope.local(Path(directory) if directory else (layout.home() or login_dir()))
+        # the failed sign-ins, counted (throttle.py); one given is kept though it has counted none yet (it has a length)
+        self.throttle = throttle if throttle is not None else Throttle()
+        # sign-up by email, closed unless turned on (0.20.0): the word of its file's `signup` line, else what the one
+        # who made it says (`signup`: `closed`, the command line's LIMINAL_LOGIN_SIGNUP), else nothing said, and it is
+        # as it always was; with the word, why it is closed
+        self.signup, self._signup_closed = self._signup_switch(signup)
         sup = self.superclass
         self.title_for = sup.title if sup is not None else (self.scope.title or "Liminal")  # what the page names
         self.TITLE = f"Login: {sup.title}" if sup is not None else "Login"
@@ -352,12 +434,43 @@ class LoginApp(App):
 
     # -- whether an account can be made with a code (the user, 2026-11-06: "only allow signup if the login app
     # is tied to an smtp server"; "domain w/ email server in mail record (lookup) or specified if none") -----
+    def _signup_switch(self, told) -> tuple[str | None, str]:
+        """(What is said of sign-up by email on this login, why that closes it or ""): the word of its file's `signup`
+        line (signup_line), else `closed` when the one who made it was told anything (`told`: the command line's
+        LIMINAL_LOGIN_SIGNUP, which only ever closes), else None: nothing said, and it goes by its email server as it
+        always did. Only the file's `open` opens it: any other word there closes it, a file that cannot be read
+        again too, and the why says how it is opened. A local login has no sign-up by email and reads neither."""
+        if self.scope.kind != "domain":
+            return None, ""
+        try:
+            said = signup_line(self.scope.path)
+        except (OSError, configparser.Error):
+            return SIGNUP_CLOSED, SIGNUP_UNREAD_WHY
+        if said == SIGNUP_OPEN:
+            return SIGNUP_OPEN, ""
+        if said is not None:
+            return SIGNUP_CLOSED, SIGNUP_CLOSED_WHY if said == SIGNUP_CLOSED else SIGNUP_NO_WORD_WHY
+        if str(told or "").strip():
+            return SIGNUP_CLOSED, SIGNUP_CLOSED_WHY
+        return None, ""
+
+    def _signup_switched_off(self) -> None:
+        """Refused (503, with how it is opened) when this login's switch closes sign-up by email. Every step of a
+        sign-up asks, so one begun while it was open (its code out, its address verified) makes no account once the
+        login has been started again closed."""
+        if self._signup_closed:
+            raise Refused(HTTPStatus.SERVICE_UNAVAILABLE, self._signup_closed)
+
     def signup_closed_why(self) -> str:
-        """Why no sign-up by email here, or "" when there is one: a local login takes none; a domain's needs
-        an email server, the one its mail record names or the one its file's [mail] names."""
+        """Why no sign-up by email here, or "" when there is one: a local login takes none; a domain's whose switch
+        closes it takes none, whatever email server it has (0.20.0: nothing of its mail is looked at then, and no mail
+        record is asked for); else it needs an email server, the one its mail record names or the one its file's
+        [mail] names."""
         if self.scope.kind != "domain":
             return (f"this login is local ({self.scope.label}): no sign-up by email; accounts are made here on the page "
                     "(Sign up) or with `liminal-login user add NAME`")
+        if self._signup_closed:
+            return self._signup_closed
         s = self.mailer.settings
         if not s.configured:
             return "email sending is not set up: " + "; ".join(s.problems()) + " (or `liminal-login user add NAME` here)"
@@ -383,6 +496,8 @@ class LoginApp(App):
         this machine's mail account, though it sends none)."""
         if self.scope.kind != "domain":
             return "a local login: no email"
+        if self._signup_closed:  # by its switch (0.20.0): no code goes out, whatever mail account is set
+            return "sign-up by email closed (`signup = open` in liminal-login.cfg opens it): no passkeys"
         s = self.mailer.settings
         return f"passkeys through {s.host}" if s.configured else "no mail account set (LIMINAL_SMTP_*): no passkeys"
 
@@ -719,8 +834,13 @@ class LoginApp(App):
     # -- the users of other logins (0.15.0): name@their.domain signs in at their own login, which does the work -----
     def remote_url(self, host: str) -> str:
         """Where the login of `host` answers: named in [remotes] (this login's file or LIMINAL_LOGIN_REMOTES), else
-        https://host."""
+        https://host. An address is taken only from what is named there: a host typed in a name is a domain, never an
+        address with a scheme of its own (the review of LOG-C1's fix, 2026-11-25: name@http://127.0.0.1:8795, typed
+        through a front, had this login ask itself over http as a program at its own machine, whose sign-ins it then
+        counted and held back). ValueError for one."""
         host = str(host or "").strip().lower().strip(".")
+        if "://" in host:
+            raise ValueError("a login is named by its domain (name@their.domain), not by an address")
         return remote_address(self.remotes.get(host) or host)
 
     def remote_of(self, who) -> tuple[str, str] | None:
@@ -829,12 +949,15 @@ class LoginApp(App):
         kept = self.users.secret_kept()
         return kept is not None and kept[0].lower() == s.user.name.lower()
 
-    def _secret_sign_in(self, body: dict):
-        """A user in without a password: a local login only. The name typed is the secret user's as the database keeps
-        it (`secret` before it is made), or `default`, or another name the database keeps a password for (0.17.0); the
-        user is made the first time, its password a random one kept in the database; refused when a user of that name
-        has a password of their own. Any other name: 400 (the page goes on to its password). name@their.domain: their
-        login's own, asked there."""
+    def _secret_sign_in(self, handler, body: dict):
+        """A user in without a password: a local login only, and a program at its own machine only, never a request a
+        front handed on (LOG-C1: 403 before anything, the page then asks for the password). The name typed is the secret
+        user's as the database keeps it (`secret` before it is made), or `default`, or another name the database keeps a
+        password for (0.17.0); the user is made the first time, its password a random one kept in the database; refused
+        when a user of that name has a password of their own. Any other name: 400 (the page goes on to its password).
+        name@their.domain: their login's own, asked there, from this machine alone too."""
+        if not web.from_this_machine(handler):
+            raise Refused(HTTPStatus.FORBIDDEN, NOT_HERE)
         remote = self.remote_of(body.get("name"))
         if remote is not None:
             return self._remote_sign_in(*remote, body, "/api/sign-in/secret")
@@ -863,12 +986,82 @@ class LoginApp(App):
         self.log(f"login: {user.name} signed in (the {which} user, no password)")
         return 200, {"token": s.token, "user": user.as_dict(), "passwordless": True, "admin": self.is_admin(s)}, self._cookie(s.token)
 
+    def _origin(self, handler) -> tuple[str, str]:
+        """Where a sign-in comes from, for its throttle: ("here", the address) for a program on this machine itself,
+        ("away", the address the front says) for what a front handed on (liminal_libs.web)."""
+        return ("here" if web.from_this_machine(handler) else "away"), web.peer(handler)
+
+    def _password_sign_in(self, handler, body: dict):
+        """A sign-in with a password: one of this login's own users, or name@their.domain at their own login, which
+        does the work after. Throttled (throttle.py): past its limits, from where it came or for the name typed, it is
+        answered 429 at once, before any key is derived or another login is asked. The try is counted before either and
+        taken back unless the name or the password was wrong (the password right, another login not answering, an
+        error), so the limits hold however many arrive together; and the keys of this login's own users are derived a
+        few at once, the others waiting their turn (the review of LOG-C1's fix, 2026-11-25)."""
+        typed = str(body.get("name") or "")
+        where, peer = self._origin(handler)
+        remote = self.remote_of(typed)
+        # one user, one count: another login's by the name and the domain their login is asked with, whatever dots and
+        # spaces were typed around them (ada@remote.test. is ada@remote.test); this login's own by the name typed
+        # (name@this.domain: the name)
+        counted = f"{remote[0].strip()}@{remote[1]}" if remote is not None else self.own_name(typed)
+        wait, at = self.throttle.tried(where, peer, counted)
+        if at is None:
+            return self._wait_answer(wait, "failed sign-ins")
+        wrong = False
+        try:
+            if remote is not None:  # name@their.domain: their own login signs them in, and does the work after
+                try:
+                    return self._remote_sign_in(*remote, body)
+                except Refused as e:
+                    wrong = e.status == HTTPStatus.UNAUTHORIZED
+                    raise
+            with self.throttle.deriving(where):
+                user = self.users.verify(counted, body.get("password"))
+            wrong = user is None
+        finally:
+            if wrong:
+                self._failed(where, peer, counted)
+            else:  # right, or neither right nor wrong: not a failed sign-in
+                self.throttle.forget(where, peer, counted, at)
+        if user is None:
+            if self.failure_delay:
+                time.sleep(self.failure_delay)
+            self.log("login: a sign-in failed (wrong name or password)")
+            raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password")
+        return self._signed_in(user)
+
+    def _failed(self, where: str, peer: str, name: str, what: str = "failed sign-ins") -> None:
+        """A wrong name or password, or a sign-up's wrong code (`what`), counted when it was tried (never the name, the
+        password or the code in the log): said once it holds the next back."""
+        if self.throttle.wait(where, peer, name) > 0:
+            self.log(f"login: too many {what} {'at this machine' if where == 'here' else 'from ' + peer}: "
+                     f"the next wait, {self.throttle.window:g} s at the most")
+
+    @staticmethod
+    def _wait_answer(wait: float, what: str):
+        """What a try held back is answered: 429, the seconds in its words and in Retry-After."""
+        seconds = max(1, math.ceil(wait))
+        return 429, {"error": f"too many {what}: try again in {seconds} s"}, [("Retry-After", str(seconds))]
+
     # -- the routes ------------------------------------------------------------------------------
     def api(self, handler, method: str, path: str, query: dict, body: dict | None):
+        """The routes (_api). A store closed under a request is said as a session ended (0.17.2). Behind a front the
+        browser reached over https, every cookie set is Secure (LOG-C1), so it travels over https alone; at this machine,
+        over http, as it always was. On a library older than the one it needs (LIBS_FLOOR) nothing is answered but
+        that."""
+        if not hasattr(web, "from_this_machine"):
+            raise Refused(HTTPStatus.SERVICE_UNAVAILABLE, LIBS_TOO_OLD)
         try:
-            return self._api(handler, method, path, query, body)
+            answer = self._api(handler, method, path, query, body)
         except VaultClosed:  # signed out (or the session ended) while this request was using the store (0.17.2)
             raise Refused(HTTPStatus.UNAUTHORIZED, "signed out while this was being asked: sign in again") from None
+        if len(answer) > 2 and answer[2] and web.forwarded_https(handler):
+            pairs = list(answer[2].items()) if isinstance(answer[2], dict) else list(answer[2])
+            secure = [(k, v if k.lower() != "set-cookie" or "secure" in {p.strip().lower() for p in v.split(";")}
+                       else f"{v}; Secure") for k, v in pairs]
+            answer = (answer[0], answer[1], secure, *answer[3:])
+        return answer
 
     def _api(self, handler, method: str, path: str, query: dict, body: dict | None):
         body = body or {}
@@ -902,12 +1095,19 @@ class LoginApp(App):
             self._require(handler)
             return 200, {"users": self.users.names()}
         if path == "/api/users" and method == "POST":
-            # a domain's login: a user signed in adds one, everyone else signs up with a code; a local login: anyone at
-            # this machine signs up on the page (0.14.0, the user: "signup and sign-in should be options too")
-            if self.users.count() and not isinstance(self.session(handler), Session) and self.scope.kind == "domain":
-                raise Refused(HTTPStatus.UNAUTHORIZED, "sign in to add a user")  # one of its own users: not another login's
+            # a domain's login: a user signed in adds one, everyone else signs up with a code, and the first user is made
+            # at its machine (`liminal-login user add NAME`), never here without a session, not even while it has none
+            # (LOG-C1); a local login: anyone at this machine signs up on the page (0.14.0, the user: "signup and sign-in
+            # should be options too"), and nobody a front hands on does without a session
+            signed_in = isinstance(self.session(handler), Session)  # one of its own users: not another login's
             if not self.users.count() and self.signup_open():
                 raise Refused(HTTPStatus.CONFLICT, "the first account is made with a code sent to your email (sign up)")
+            if not signed_in and self.scope.kind == "domain":
+                if self.users.count():
+                    raise Refused(HTTPStatus.UNAUTHORIZED, "sign in to add a user")
+                raise Refused(HTTPStatus.FORBIDDEN, FIRST_AT_THE_MACHINE)
+            if not signed_in and not web.from_this_machine(handler):
+                raise Refused(HTTPStatus.FORBIDDEN, NO_SESSION_HERE)
             try:
                 user = self.users.create(body.get("name"), body.get("password"), body.get("email") or None)
             except ValueError as e:
@@ -917,26 +1117,17 @@ class LoginApp(App):
         if path == PLUGINS_PATH or path.startswith(PLUGINS_PATH + "/"):  # its plugins (0.18.0)
             return self._plugin_route(handler, method, path, body)
         if path == "/api/sign-in/secret" and method == "POST":
-            return self._secret_sign_in(body)
+            return self._secret_sign_in(handler, body)
         if path == "/api/signup" and method == "POST":
-            return self._signup(body)
+            return self._signup(handler, body)
         if path == "/api/signup/resend" and method == "POST":
-            return self._resend(body)
+            return self._resend(handler, body)
         if path == "/api/signup/verify" and method == "POST":
-            return self._verify(body)
+            return self._verify(handler, body)
         if path == "/api/signup/complete" and method == "POST":
             return self._complete(body)
         if path == "/api/sign-in" and method == "POST":
-            remote = self.remote_of(body.get("name"))
-            if remote is not None:  # name@their.domain: their own login signs them in, and does the work after
-                return self._remote_sign_in(*remote, body)
-            user = self.users.verify(self.own_name(body.get("name")), body.get("password"))
-            if user is None:
-                if self.failure_delay:
-                    time.sleep(self.failure_delay)
-                self.log("login: a sign-in failed (wrong name or password)")
-                raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password")
-            return self._signed_in(user)
+            return self._password_sign_in(handler, body)
         if path == "/api/sign-out" and method == "POST":
             for token in self._tokens(handler):  # every session this browser carries
                 s = self._end(token)
@@ -1007,12 +1198,25 @@ class LoginApp(App):
         self.last_sent = receipt
         return receipt
 
-    def _signup(self, body: dict):
-        """An email: its code goes out; the sign-up waits for it. Only a domain's login with an email server
-        takes sign-ups, for addresses at the domain unless its file says `members = any`."""
+    def _code_held(self, handler, body: dict):
+        """A code asked for, a sign-up begun or its code sent again, while the wrong codes for its address or from where
+        it is asked are at their limit: the 429 a code typed would get, and nothing is sent; None when it is not held.
+        So a new code gives no tries back (they are the throttle's, by the address and by where they came from), and
+        none goes out that could not be typed."""
+        where, peer = self._origin(handler)
+        wait = self.throttle.wait(where, peer, str(body.get("email") or ""))
+        return self._wait_answer(wait, WRONG_CODES) if wait > 0 else None
+
+    def _signup(self, handler, body: dict):
+        """An email: its code goes out; the sign-up waits for it. Only a domain's login whose switch does not close it
+        and that has an email server takes sign-ups, for addresses at the domain unless its file says `members = any`;
+        none while the wrong codes for the address, or from where it is asked, are held back (_code_held)."""
         why = self.signup_closed_why()
         if why:
             raise Refused(HTTPStatus.SERVICE_UNAVAILABLE, why)
+        held = self._code_held(handler, body)
+        if held is not None:
+            return held
         email = (body.get("email") or "").strip().lower()
         if self.scope.members == "domain" and not email.endswith("@" + self.scope.domain):
             raise Refused(HTTPStatus.BAD_REQUEST, f"this login is for {self.scope.domain}: an address at it")
@@ -1026,7 +1230,13 @@ class LoginApp(App):
                  f"({sent['host']} answered {sent['code']} {sent['reply']})")
         return 202, {"email": mask(waiting["email"]), "expiresAt": waiting["expiresAt"], "minutes": CODE_MINUTES, "sent": sent}
 
-    def _resend(self, body: dict):
+    def _resend(self, handler, body: dict):
+        """A new code for the sign-up under way: not while the switch closes sign-up, nor while the wrong codes for its
+        address or from where it is asked are held back; the old code no longer counts."""
+        self._signup_switched_off()
+        held = self._code_held(handler, body)
+        if held is not None:
+            return held
         try:
             code = self.users.resend_signup(body.get("email"))
         except ValueError as e:
@@ -1035,18 +1245,38 @@ class LoginApp(App):
         sent = self._send_code(waiting["email"], code)
         return 202, {"email": mask(waiting["email"]), "expiresAt": waiting["expiresAt"], "minutes": CODE_MINUTES, "sent": sent}
 
-    def _verify(self, body: dict):
-        """The code typed: right, the proof for the last step; wrong, a try spent."""
+    def _verify(self, handler, body: dict):
+        """The code typed: right, the proof for the last step; wrong, a try spent, and counted where a wrong password
+        is (throttle.py; 0.20.0, the last check of LOG-C1's fix: a six-digit code could be guessed at speed, five
+        tries with each new code): by where it came from and by the address the code was mailed to, with a sign-in's
+        numbers and in its counts. Past either limit it is answered 429 with Retry-After before the code is looked
+        at. Counted before it is compared and taken back unless it was wrong (it was right; no sign-up is under way;
+        the code has expired, or its tries are spent), so the limits hold for codes sent together."""
+        self._signup_switched_off()
+        typed = str(body.get("email") or "")
+        where, peer = self._origin(handler)
+        wait, at = self.throttle.tried(where, peer, typed)
+        if at is None:
+            return self._wait_answer(wait, WRONG_CODES)
+        wrong = False
         try:
             token = self.users.verify_signup(body.get("email"), body.get("code"))
         except ValueError as e:
-            self.log(f"login: a code was refused for {mask(str(body.get('email') or ''))}: {e}")
+            wrong = isinstance(e, WrongCode)
+            self.log(f"login: a code was refused for {mask(typed)}: {e}")
             raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
-        self.log(f"login: {mask(str(body.get('email') or ''))} verified its address")
-        return 200, {"token": token, "email": mask(str(body.get("email") or "")), "minutes": 30}
+        finally:
+            if wrong:
+                self._failed(where, peer, typed, WRONG_CODES)
+            else:  # right, or not a guess: nothing stays counted
+                self.throttle.forget(where, peer, typed, at)
+        self.log(f"login: {mask(typed)} verified its address")
+        return 200, {"token": token, "email": mask(typed), "minutes": 30}
 
     def _complete(self, body: dict):
-        """The name and the password chosen: the account is made (its email verified) and signed in."""
+        """The name and the password chosen: the account is made (its email verified) and signed in. Not while the
+        switch closes sign-up."""
+        self._signup_switched_off()
         try:
             user = self.users.complete_signup(body.get("email"), body.get("token"), body.get("name"), body.get("password"))
         except ValueError as e:

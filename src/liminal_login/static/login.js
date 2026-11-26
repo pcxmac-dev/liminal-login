@@ -316,6 +316,8 @@
     // way: with a password typed, that user's sign-in; with none, or when it is refused, the secret user's way in by the
     // name typed (it has no password to type, so whatever is in the box does not keep it out); anyone else with no
     // password typed is asked for theirs. Which name is the secret user's stays the login's to say (400: not this one).
+    // Refused is wrong (401) or, since 0.20.0, held back after too many wrong ones (429): the secret user and `default`
+    // never wait, so the way in is tried after either, and anyone else is told what their sign-in was answered.
     const notSecret = (err) => err.status === 400 || err.status === 403;
     const enter = async () => {
       const typed = $('name').value.trim(), password = $('password').value;
@@ -324,7 +326,7 @@
       let refused = null;
       if (password) {
         try { await api('POST', 'api/sign-in', { name: $('name').value, password }); $('password').value = ''; render(); return; }
-        catch (err) { if (err.status !== 401) { $('err').textContent = err.message; return; } refused = err; }
+        catch (err) { if (err.status !== 401 && err.status !== 429) { $('err').textContent = err.message; return; } refused = err; }
       }
       try { await api('POST', 'api/sign-in/secret', { name: typed }); $('password').value = ''; render(); }
       catch (err) {
@@ -340,23 +342,22 @@
     focusFirst(name ? $('password') : $('name'));
   }
 
-  // Sign up: a domain's login with an email server sends a code first; a local login (or a domain's first user while it
-  // has no email server) makes the account here
+  // Sign up: a domain's login with an email server sends a code first; a local login makes the account here. A domain's
+  // without one takes no account from the page, not even its first, which is made at its own machine (LOG-C1): it says how
   function signUp(st) {
     if (st.signup && st.signup.email) return emailForm(false);
-    if (st.scope && st.scope.kind === 'domain' && st.users > 0) return entryForm(st, (st.signup && st.signup.why) || 'signing up needs an email server');
+    if (st.scope && st.scope.kind === 'domain') return entryForm(st, (st.signup && st.signup.why) || 'signing up needs an email server');
     return createForm(st);
   }
 
   function createForm(st) {
-    // no code: a local login sends no email, a domain's has no email server yet
-    const local = !st.scope || st.scope.kind !== 'domain';
+    // no code: a local login sends no email
     const first = st.users === 0;
     titled(first ? 'the first user' : 'sign up');
     main.innerHTML = `<div class="card center">
       <div class="login-icon">${icon('lambda', 56)}</div>
       <h1>${first ? 'Create the first user' : 'Sign up'}</h1>
-      <p class="muted">${first ? `${esc(forTitle)} has no users yet: the first one is yours. ` : ''}The password unlocks your keys and accounts; it is never stored. (${local ? 'This login is local: it sends no email, so no code is needed.' : 'Email sending is not set up here, so no code is needed for the first user.'})</p>
+      <p class="muted">${first ? `${esc(forTitle)} has no users yet: the first one is yours. ` : ''}The password unlocks your keys and accounts; it is never stored. (This login is local: it sends no email, so no code is needed.)</p>
       <form id="first">
         <div class="field"><label for="name">Account name</label><input id="name" type="text" ${kb('username')} maxlength="40" required></div>
         <div class="field"><label for="email">Email (optional)</label><input id="email" type="email" ${kb('email')} maxlength="254"></div>

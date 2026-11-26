@@ -3,10 +3,21 @@
 # machine, so each request is handed to it as a page of that machine would send it: the app's own address as its Host,
 # and no Origin. The browser's Sec-Fetch-Site still tells the app whether a request came from its own page, and every
 # write still needs the app's own header, which no other site's page can send.
+#
+# Every request handed on is marked as the front's (X-Liminal-Front, set here over whatever a client sent): the front
+# shares the app's network and connects from 127.0.0.1 as a program of that machine would, and the mark is how the app
+# knows it is not one. So nobody who reaches the front comes in without a password or makes an account without a
+# session. Caddy also tells the app the browser came over https (X-Forwarded-Proto: the session cookie is then Secure)
+# and the address the front itself was reached from (X-Forwarded-For, what the app's throttle counts sign-ins by),
+# writing both over a client's. That address is the browser's own only where Docker hands it through (Docker Engine on
+# Linux, the port published wider than 127.0.0.1). Published on 127.0.0.1, behind Docker Desktop, or behind a tunnel or
+# a proxy on the host, it is one address for everyone, and the throttle's 30 from one address are then everyone's
+# together (the README). Not yet seen in Docker.
 {$LIMINAL_REMOTE_HOST}:8443 {
 	tls internal
 	reverse_proxy 127.0.0.1:8795 {
 		header_up Host 127.0.0.1:8795
 		header_up -Origin
+		header_up X-Liminal-Front 1
 	}
 }

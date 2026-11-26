@@ -336,3 +336,35 @@ def test_mail_setup_off_windows_says_why_and_keeps_nothing_half_written(monkeypa
     answers = iter(["direct", "me@proton.me"])
     assert cli.main(["mail", "setup"]) == 1
     assert "the mail account was not kept: saving a user environment variable needs Windows" in capsys.readouterr().err
+
+
+def test_mail_setup_keeps_the_files_own_word_on_sign_up(tmp_path, monkeypatch, capsys):
+    """0.20.0: `mail setup` writes the login's file back through the library's Scope, which knows no `signup` line, so
+    the file's own word on sign-up by email went with every write: a `closed` its owner wrote was gone, and the login
+    took sign-ups again at its next start. The line is kept, as written, in [login]; a file without one gets none."""
+    from liminal_libs.apps import Scope
+
+    from liminal_login.app import signup_line
+
+    monkeypatch.setattr(cli.secrets, "put", lambda name, value: pytest.fail("no password is typed here"))
+    monkeypatch.setattr(cli.secrets, "remove", lambda name: False)
+    cfg = tmp_path / "liminal-login.cfg"
+
+    def set_up(line: str) -> str:
+        cfg.write_text("[login]\nscope = https://example.test\ntitle = Somewhere\n" + line + "\n[remotes]\n"
+                       "other.test = https://login.other.test:8443\n", encoding="utf-8")
+        for _ in range(2):  # written back twice: the line is there once
+            answers = iter(["direct", "login@example.test"])
+            monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+            assert cli.main(["--cfg", str(cfg), "mail", "setup"]) == 0 and f"kept in {cfg}" in capsys.readouterr().out
+        written = Scope.read(cfg)  # the rest as `mail setup` writes it
+        assert (written.url, written.title, written.mail["host"]) == ("https://example.test", "Somewhere", "direct")
+        assert written.remotes == {"other.test": "https://login.other.test:8443"}
+        return cfg.read_text(encoding="utf-8")
+
+    for line, word in (("signup = closed\n", "closed"), ("Signup = OPEN  ; ours\n", "open"), ("signup = opne\n", "opne")):
+        text = set_up(line)
+        assert signup_line(cfg) == word and text.count(f"\nsignup = {word}\n") == 1 and text.count("signup =") == 1, line
+        assert text.index("[login]") < text.index(f"signup = {word}") < text.index("[mail]")  # in its own section
+    text = set_up("")
+    assert signup_line(cfg) is None and "signup =" not in text

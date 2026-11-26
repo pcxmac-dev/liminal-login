@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "liminal-login"
-version = "0.19.0"  # the login app's own release (CHANGELOG.md)
+version = "0.20.0"  # the login app's own release (CHANGELOG.md)
 description = "The Liminal login app: one instance per app (charts, integrator), its users signing up by a code mailed to them, each with a store of key-vector pairs (API keys, account names, passwords) encrypted from their password, which only this app opens; its page with the one user icon; what every other app and plugin asks for a key."
 readme = "README.md"
 requires-python = ">=3.10"
 # the apps' frame and the login client (liminal_libs.apps), outgoing mail (liminal_libs.mail), its plugins' kind (1.92.0:
-# LoginPlugin), and AES-GCM for the stores (crypto.py)
-dependencies = ["liminal-libs>=1.92.0", "cryptography>=42"]
+# LoginPlugin), a request a front handed on told from this machine's own (1.98.0: web.from_this_machine, peer,
+# forwarded_https; on an older library the login answers nothing but that it needs this one: app.py's LIBS_FLOOR,
+# which a test holds to the number below), and AES-GCM for the stores (crypto.py)
+dependencies = ["liminal-libs>=1.98.0", "cryptography>=42"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

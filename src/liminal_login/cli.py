@@ -7,13 +7,17 @@ at its address; the app passes these itself when it starts the login. `serve` ke
 typed hidden, twice; never on the command line; no code: the machine's owner adding one); `user list`
 names them; `status` says what is there; `mail test ADDRESS` sends a test message through the mail
 account in your environment (LIMINAL_SMTP_*: liminal_libs.mail). The login's folder is
-LIMINAL_LOGIN_DIR, else store/data/login (liminal_libs.layout)."""
+LIMINAL_LOGIN_DIR, else store/data/login (liminal_libs.layout). LIMINAL_LOGIN_SCOPE says what the login
+is tied to over its file's `scope`, to these commands alone (docker/compose.yaml sets it; `scoped`), and
+LIMINAL_LOGIN_SIGNUP closes sign-up by email on the login `serve` makes unless its file's own `signup` line
+opens it (docker/compose.yaml sets it too; `signup_told`)."""
 from __future__ import annotations
 
 import argparse
 import getpass
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from liminal_libs import layout, secrets, web
@@ -26,17 +30,62 @@ from liminal_libs.mail import FROM_VAR, HOST_VAR, PASSWORD_VAR, PORT_VAR, SECURI
 
 from . import __version__
 from . import mailcheck
-from .app import DIR_VAR, LoginApp, Superclass, folder_for, login_dir, superclass_of
+from .app import (DIR_VAR, SIGNUP_CLOSED, LoginApp, Superclass, folder_for, keep_signup_line, login_dir, signup_line,
+                  superclass_of)
 from .users import UserStore
 
 
 QUIET_SECONDS = 600.0  # `serve --until-quiet`: the server ends after this long without a request (LIMINAL_QUIET_SECONDS)
+# What the login is tied to, said over its file's `scope` (LOG-C1): docker/compose.yaml says https://<the host its front
+# answers at> there, once, where the recipe is set up. Read here alone, by this command line's own commands (the user,
+# 2026-11-24): never by a login made in code (app.py), so one left set on this machine cannot turn the login an app
+# holds, the platform's or the charts', into a domain's with other users in another folder.
+SCOPE_VAR = "LIMINAL_LOGIN_SCOPE"
 
 
-def _scope(args) -> Scope | None:
-    """What the login is tied to: the file named (--cfg, LIMINAL_LOGIN_CFG), else the one found; None: none."""
+def scoped(scope: Scope | None, env=None) -> Scope | None:
+    """The scope found (the login's file, Scope.find) tied instead to what LIMINAL_LOGIN_SCOPE says, when it is set: a
+    domain's https address or a file URL, as the file's `scope` line is written; the rest of the file kept (its title,
+    port, [mail], [remotes]). It is how docker/compose.yaml makes its login the domain's of the host its front answers
+    at, said once where the recipe is set up (LIMINAL_REMOTE_HOST). The file's admin is kept unless it is its own
+    domain's default (admin@<that domain>, as `mail setup` writes it back): then the new domain's. ValueError when it
+    is no scope, or the admin kept is not at its domain."""
+    env = os.environ if env is None else env
+    raw = str(env.get(SCOPE_VAR) or "").strip()
+    if not raw:
+        return scope
+    own = scope is not None and scope.admin and scope.admin != f"admin@{scope.domain}"
+    admin = f"admin = {scope.admin}\n" if own else ""
+    try:
+        told = Scope.parse(f"[login]\nscope = {raw}\n{admin}")
+    except ValueError as e:
+        raise ValueError(f"{SCOPE_VAR}: {e}") from None
+    return told if scope is None else replace(scope, url=told.url, admin=told.admin)
+
+
+# Sign-up by email on the login served, where its file says nothing of it (the last check of LOG-C1's fix, 2026-11-25;
+# the user: "Closed unless turned on"): docker/compose.yaml says `closed` here, so the container takes no sign-up from
+# a copy of docker/liminal-login.cfg that has no `signup` line, whatever mail record its host has. Read here alone,
+# as LIMINAL_LOGIN_SCOPE is, and handed to the login `serve` makes: never read by a login made in code. Set, it
+# closes, whatever it says; it never opens: only the file's own `signup = open` does (app.py's _signup_switch).
+SIGNUP_VAR = "LIMINAL_LOGIN_SIGNUP"
+
+
+def signup_told(env=None) -> str | None:
+    """What the command line was told of sign-up by email: `closed` when LIMINAL_LOGIN_SIGNUP is set, to whatever word
+    (it only ever closes); None when it is not set, and the login goes by its file."""
+    env = os.environ if env is None else env
+    return SIGNUP_CLOSED if str(env.get(SIGNUP_VAR) or "").strip() else None
+
+
+def _scope(args, told: bool = True) -> Scope | None:
+    """What the login is tied to: the file named (--cfg, LIMINAL_LOGIN_CFG), else the one found, its scope the one
+    LIMINAL_LOGIN_SCOPE says when it is set (`told`: not for what is written back to the file); None: none. The one
+    place the variable is read. Every command here reads it so, `serve` and `user add` alike: the users the one makes
+    are the ones the other signs in, and `status` speaks of the same login."""
     cfg = getattr(args, "cfg", None)
-    return Scope.read(Path(cfg)) if cfg else Scope.find()
+    found = Scope.read(Path(cfg)) if cfg else Scope.find()
+    return scoped(found) if told else found
 
 
 def _root(args) -> Path:
@@ -66,8 +115,10 @@ def _log(folder: Path) -> Logger:
 
 def cmd_serve(args) -> int:
     folder = _dir(args)
-    # the port it is told is the port it is set to: its address and its cookie's name follow (0.17.1)
-    app = LoginApp(_root(args), log=_log(folder), superclass=_superclass(args), scope=_scope(args), port=args.port)
+    # the port it is told is the port it is set to: its address and its cookie's name follow (0.17.1); and what the
+    # command line was told of sign-up by email, for a file that says nothing of it (0.20.0)
+    app = LoginApp(_root(args), log=_log(folder), superclass=_superclass(args), scope=_scope(args), port=args.port,
+                   signup=signup_told())
     port = args.port if args.port is not None else app.port()
     print(f"login app for {app.title_for}: its page at {app.url(port)} (the folder {folder}; {app.mail_words()}; "
           "Ctrl+C to stop)", flush=True)
@@ -112,7 +163,10 @@ def cmd_user(args) -> int:
                 print(f"{u['name']}: created {u['createdAt']}, last sign-in {u['seenAt'] or 'never'}"
                       + (f", {u['email']}{' (verified)' if u['verified'] else ''}" if u["email"] else ""))
             if not users.count():
-                print("no users yet: `liminal-login user add NAME`, or the page's first visit")
+                scope = _scope(args)  # a domain's page makes no first user of its own any more (0.20.0)
+                print("no users yet: `liminal-login user add NAME`" + (
+                    " (on a domain's login the page makes one only by a mailed code)"
+                    if scope is not None and scope.kind == "domain" else ", or the page's first visit"))
             return 0
         if args.action == "add":
             if not args.name:
@@ -163,7 +217,7 @@ def mail_setup(args, ask=None, hidden=None) -> int:
         user = ask(f"User, the account's address [{now.user}]: ").strip() or now.user
         password = hidden("Password (typed hidden; empty keeps the one kept): ") if user else ""
     sender = ask(f"From, the address the message comes from [{now.sender or user}]: ").strip() or now.sender or user
-    scope = _scope(args)
+    scope = _scope(args, told=False)  # written back below: the file's own scope, never LIMINAL_LOGIN_SCOPE's
     mailbox: dict = {}
     mailbox_password = ""
     if scope is not None and scope.path is not None and scope.kind == "domain" and host != "direct":
@@ -187,8 +241,11 @@ def mail_setup(args, ask=None, hidden=None) -> int:
             if mailbox and (mailbox_password or password):
                 secrets.put("LIMINAL_IMAP_PASSWORD", mailbox_password or password)
             mail = {**scope.mail, "host": host, "port": str(port), "security": security, "user": user, "from": sender}
+            said = signup_line(scope.path)  # the file's own word on sign-up by email, which the library does not write
             scope = replace(scope, mail={k: v for k, v in mail.items() if v}, imap=mailbox or scope.imap)
             scope.write(scope.path)
+            if said is not None:  # kept (0.20.0): written back without it, a `closed` its owner wrote was gone
+                keep_signup_line(scope.path, said)
             print(f"kept in {scope.path} under [mail]" + (" and [imap]" if mailbox else ""))
         else:
             save_user_variable(HOST_VAR, host)

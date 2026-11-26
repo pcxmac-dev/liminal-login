@@ -455,7 +455,9 @@ def test_the_secret_user_comes_in_without_a_password_on_a_local_login(served, fo
     assert "$('signin').addEventListener('submit', (e) => { e.preventDefault(); enter(); });" in page
     signin = page[page.index("function signInForm("):page.index("function signUp(")]
     assert signin.index("api('POST', 'api/sign-in', { name: $('name').value, password })") < signin.index("api('POST', 'api/sign-in/secret', { name: typed })")
-    assert "if (err.status !== 401) { $('err').textContent = err.message; return; } refused = err;" in signin
+    # refused is wrong (401) or held back after too many wrong ones (429, 0.20.0): the way in is tried after either, so
+    # the secret user and `default` never wait on this form (it stopped at the 429, and told the admin to wait)
+    assert "if (err.status !== 401 && err.status !== 429) { $('err').textContent = err.message; return; } refused = err;" in signin
     assert "if (refused) { $('err').textContent = refused.message; return; }" in signin and "Your password is needed to sign in." in signin
     assert """<div class="login-icon">${icon('lambda', 56)}</div>""" not in signin and "!== 'secret'" not in signin
     # a login that does not answer at all is said to have stopped, not "Failed to fetch" (the user: "getting a failed to fetch")
@@ -655,3 +657,28 @@ def test_a_name_that_names_no_login_is_a_400_with_the_reason(served, monkeypatch
         status, data, _ = _call(port, "POST", path, body)
         assert status == 400 and "a@[ names no login that can be asked" in data["error"], (path, status, data)
     assert asked == []
+
+
+def test_a_library_older_than_the_one_it_needs_is_said_in_words(served, monkeypatch):
+    """The review of LOG-C1's fix (2026-11-25): the library the login needs is pip's to check (pyproject.toml), and an
+    install made without its dependencies, an editable one of two checkouts, runs whatever they hold. On a library
+    before 1.98.0 `web` has no from_this_machine: the login was imported all the same, and every sign-in answered 500
+    with the reason in the log alone. Now every route says which library is needed, and the floor it names is the one
+    pyproject.toml asks pip for."""
+    import re
+    from pathlib import Path
+
+    from liminal_libs import web
+    from liminal_login import app as app_mod
+
+    app, port, lines = served
+    asked = re.search(r'"liminal-libs>=([0-9.]+)"', (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    assert asked and asked.group(1) == app_mod.LIBS_FLOOR and f"liminal-libs {app_mod.LIBS_FLOOR} or newer" in app_mod.LIBS_TOO_OLD
+    assert _call(port, "POST", "/api/sign-in/secret", {"name": "secret"})[0] == 200  # on the library it needs
+    monkeypatch.delattr(web, "from_this_machine")  # as on a library before the floor
+    for method, path, body in (("POST", "/api/sign-in/secret", {"name": "secret"}), ("GET", "/api/status", None),
+                               ("POST", "/api/sign-in", {"name": "ada", "password": "correct horse battery"}),
+                               ("POST", "/api/users", {"name": "Ada", "password": "correct horse battery"})):
+        status, data, _ = _call(port, method, path, body)
+        assert status == 503 and data["error"] == app_mod.LIBS_TOO_OLD, (path, status, data)
+    assert app.users.count() == 1 and not any("AttributeError" in m for m in lines)  # the secret user, made before

@@ -2,20 +2,24 @@
 the password (users.py's sign-ups, app.py's routes): the code is kept as a hash and never logged, five
 tries, fifteen minutes, a new one on request, the first account too; without a mail account the page
 falls back to the first-user form and says what to set; on its own the login knows no app, and an app that
-inherits it keeps its users apart."""
+inherits it keeps its users apart. The switch that closes sign-up by email on a domain's login and the one
+word that opens it (0.20.0) are here too; the Docker recipe's side of it is in test_docker_files, the
+counting of wrong codes in test_throttle."""
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection
+from pathlib import Path
 
 import pytest
 
 from liminal_libs.web import WRITE_HEADER
 from liminal_login import crypto
 from liminal_login.app import LoginApp, superclass_of
-from liminal_login.users import UserStore
+from liminal_login.users import UserStore, WrongCode
 
 COOKIE = "liminal_login"  # the login's own: on its own, no app inherits it
 
@@ -86,19 +90,56 @@ def test_a_signup_goes_email_code_then_name_and_password(folder):
     users.close()
 
 
-def test_five_wrong_codes_or_the_time_drop_a_signup_and_a_new_code_can_be_asked(folder):
+def test_five_wrong_codes_spend_a_code_the_time_drops_a_signup_and_a_new_code_can_be_asked(folder):
+    """Five wrong codes spend a code: it is compared no more, the right one neither, and its sign-up is kept, so no new
+    code follows for a minute from that last try, however late it came (0.20.0, the last check of LOG-C1's fix: the
+    sign-up was dropped at the fifth wrong code and begun again at once, five more tries with each new code and no
+    minute between them). A wrong code is told apart from the other refusals (WrongCode): it is the one the app
+    counts."""
     users = UserStore(folder / "users.db")
-    users.start_signup("bob@example.test")
+
+    def at(seconds: float) -> str:
+        return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(timespec="seconds")
+
+    def as_if(**columns) -> None:
+        """The sign-up's row as if time had passed."""
+        con = sqlite3.connect(str(folder / "users.db"))
+        con.execute(f"UPDATE signups SET {', '.join(f'{k} = ?' for k in columns)} WHERE email = ?",
+                    (*columns.values(), "bob@example.test"))
+        con.commit()
+        con.close()
+
+    code = users.start_signup("bob@example.test")
+    wrong = "000000" if code != "000000" else "111111"
     for left in (4, 3, 2, 1):
-        with pytest.raises(ValueError, match=f"{left} tries left"):
-            users.verify_signup("bob@example.test", "000000")
-    with pytest.raises(ValueError, match="last try"):
-        users.verify_signup("bob@example.test", "000000")
-    assert users.signup("bob@example.test") is None
+        with pytest.raises(WrongCode, match=f"{left} tries left"):
+            users.verify_signup("bob@example.test", wrong)
+    # the last try comes late: the code went out over a minute ago, and has twenty seconds left to live
+    as_if(sent_at=at(-61), expires_at=at(20))
+    with pytest.raises(WrongCode, match="last try for that code: a new one can be sent in 60 seconds") as last:
+        users.verify_signup("bob@example.test", wrong)
+    waiting = users.signup("bob@example.test")  # kept, its tries spent: its minute starts at that try, and it lives it
+    assert (waiting["tries"], waiting["verified"]) == (5, False) and waiting["sentAt"] >= at(-3) and waiting["expiresAt"] >= at(55)
+    for typed in (wrong, code):  # no longer compared: not a guess, and the right code comes too late
+        with pytest.raises(ValueError, match="the tries of that code are spent: a new one can be sent 60 seconds after") as refused:
+            users.verify_signup("bob@example.test", typed)
+        assert not isinstance(refused.value, WrongCode)
+    # the page lets go of a sign-up on the words of one that is gone (login.js); a spent code's keep it there, with
+    # its "Send it again"
+    page = (Path(__file__).resolve().parents[1] / "src" / "liminal_login" / "static" / "login.js").read_text(encoding="utf-8")
+    assert "if (/ask for a new one|start one first/.test(err.message)) { signup = null; }" in page
+    assert not any(re.search("ask for a new one|start one first", str(e.value)) for e in (last, refused))
+    assert users.signup("bob@example.test")["tries"] == 5  # asked again, nothing changed
+    for again in (users.start_signup, users.resend_signup):  # no new code at once, begun again or sent again
+        with pytest.raises(ValueError, match="the tries of the last code are spent, and a new one goes out no sooner than 60 "
+                                             "seconds after the last of them"):
+            again("bob@example.test")
     with pytest.raises(ValueError, match="start one first"):
-        users.verify_signup("bob@example.test", "000000")
-    # too soon for another; then a new code, and only it counts
+        users.verify_signup("nobody@example.test", "000000")
+    # a minute after that last try: a new code, and only it counts; too soon for another
+    as_if(sent_at=at(-61))
     first = users.start_signup("bob@example.test")
+    assert users.signup("bob@example.test")["tries"] == 0
     with pytest.raises(ValueError, match="seconds ago"):
         users.resend_signup("bob@example.test")
     second = users.resend_signup("bob@example.test", sooner_than=0)
@@ -112,6 +153,13 @@ def test_five_wrong_codes_or_the_time_drop_a_signup_and_a_new_code_can_be_asked(
     with pytest.raises(ValueError, match="expired"):
         users.verify_signup("cy@example.test", "000000")
     assert users.signup("cy@example.test") is None
+    # a sign-up already verified is not wiped by wrong codes sent after it, as it was at the fifth: its proof holds
+    mailed = users.start_signup("di@example.test")
+    token = users.verify_signup("di@example.test", mailed)
+    for _ in range(6):
+        with pytest.raises(ValueError, match="tries left|last try|are spent"):
+            users.verify_signup("di@example.test", "000000" if mailed != "000000" else "111111")
+    assert users.complete_signup("di@example.test", token, "Di", "correct horse battery").name == "Di"
     users.close()
 
 
@@ -267,6 +315,65 @@ def test_a_domain_login_takes_signups_only_with_an_email_server(folder, monkeypa
             local.close()
     finally:
         app.close()
+
+
+def test_only_the_files_own_word_opens_sign_up_by_email_once_something_closes_it(folder, tmp_path, monkeypatch):
+    """The switch (0.20.0; the user, 2026-11-25: "Closed unless turned on"): `signup` under the file's [login]. `open`
+    opens sign-up by email, which still needs its email server; `closed`, or any other word, closes it; and where the
+    file has no such line, so does whatever the one who made the login was told (LIMINAL_LOGIN_SIGNUP, which the
+    command line hands on and which never opens). With neither it is as it always was (the test above). Closed, it
+    says how it is opened and asks for no mail record. A local login has no sign-up by email whatever is said."""
+    from dataclasses import replace
+
+    from liminal_libs.apps import Scope
+
+    from conftest import FakeMailer
+    from liminal_login import app as app_mod
+    from liminal_login import cli
+
+    monkeypatch.setattr(app_mod, "mx_records", lambda d: pytest.fail("no mail record is asked for"))
+    cfg = tmp_path / "liminal-login.cfg"
+
+    def made(line, told, scope_line="scope = https://example.test", scope=None):
+        cfg.write_text(f"[login]\n{scope_line}\ntitle = Somewhere\n" + (f"{line}\n" if line is not None else "") + "\n[mail]\n",
+                       encoding="utf-8")
+        app = LoginApp(folder, log=lambda m: None, mailer=FakeMailer(configured=True), scope=scope or Scope.read(cfg), signup=told)
+        try:
+            return app.signup, app.signup_closed_why(), app.signup_status()["email"], app.mail_words()
+        finally:
+            app.close()
+
+    how = "`signup = open` under [login] in its liminal-login.cfg opens it"
+    assert all(how in why and "`liminal-login user add NAME`" in why
+               for why in (app_mod.SIGNUP_CLOSED_WHY, app_mod.SIGNUP_NO_WORD_WHY, app_mod.SIGNUP_UNREAD_WHY))
+    opened = ("open", "", True, "passkeys through smtp.example.test")
+    closed = ("closed", app_mod.SIGNUP_CLOSED_WHY, False, "sign-up by email closed (`signup = open` in liminal-login.cfg opens it): no passkeys")
+    no_word = ("closed", app_mod.SIGNUP_NO_WORD_WHY, False, closed[3])
+    as_it_was = (None, "", True, opened[3])
+    for told in (None, "closed", "open"):  # whatever was told, the file's own word decides
+        assert made("signup = open", told) == opened and made("Signup =  OPEN  ; ours", told) == opened, told
+        assert made("signup = closed", told) == closed, told
+        assert made("signup = opne", told) == no_word and made("signup =", told) == no_word, told
+    # no such line: anything told closes it, `open` too (it never opens); nothing told, and it is as it was
+    assert made(None, "closed") == closed and made(None, "open") == closed
+    assert made(None, None) == as_it_was and made(None, " ") == as_it_was
+    # a login made in code, with no file: what it is told, or as it was
+    in_code = Scope.for_domain("example.test")
+    assert made(None, "closed", scope=in_code) == closed and made(None, None, scope=in_code) == as_it_was
+    # LIMINAL_LOGIN_SIGNUP is the command line's alone, as LIMINAL_LOGIN_SCOPE is: left set on a machine, a login made
+    # in code does not read it; the command line does, and hands on `closed` whatever it says
+    monkeypatch.setenv("LIMINAL_LOGIN_SIGNUP", "closed")
+    assert made(None, None) == as_it_was and made(None, None, scope=in_code) == as_it_was and cli.signup_told() == "closed"
+    assert cli.signup_told({"LIMINAL_LOGIN_SIGNUP": "open"}) == "closed"
+    assert cli.signup_told({}) is None and cli.signup_told({"LIMINAL_LOGIN_SIGNUP": " "}) is None
+    monkeypatch.delenv("LIMINAL_LOGIN_SIGNUP")
+    # its file gone since it was read: closed, said
+    gone = replace(Scope.read(cfg), path=tmp_path / "gone" / "liminal-login.cfg")
+    assert made(None, None, scope=gone) == ("closed", app_mod.SIGNUP_UNREAD_WHY, False, closed[3])
+    # a local login: no sign-up by email, whatever its file and the command line say
+    for line, told in (("signup = open", None), ("signup = closed", "closed"), ("signup = opne", "open")):
+        word, why, email, words = made(line, told, scope_line=f"scope = {tmp_path.as_uri()}")
+        assert (word, email, words) == (None, False, "a local login: no email") and "this login is local" in why
 
 
 def test_a_domains_login_says_how_its_codes_go_out(served_mail):

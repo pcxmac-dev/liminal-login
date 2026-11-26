@@ -1,5 +1,168 @@
 # Changelog
 
+## 0.20.0 (2026-11-25)
+
+The remote login in Docker no longer lets in, as its admin, anyone who reaches it: LOG-C1 of the independent review
+(checked 2026-11-23, rated high; the user, 2026-11-23: "The two high ones"; with liminal-libs 1.98.0, the floor now).
+docker/compose.yaml published the front's port on every interface. The front, Caddy in the login's own network,
+connects from 127.0.0.1 and handed every request on as `Host: 127.0.0.1:8795` with no Origin, and the container's
+login was local (`scope = file:///data`). So `POST /api/sign-in/secret` signed anyone in as `secret`, the admin, or
+as `default`, with no password; `POST /api/users` made accounts without a session; and the session cookie had no
+Secure flag. On this machine, without a front, the ways in are as they were: the secret user and `default` come in by
+their names, and the page's Sign up makes an account on a local login.
+- The container's login is a domain's, the https host its front answers at: docker/liminal-login.cfg says
+  `scope = https://localhost`, and compose.yaml says the host once, over that line
+  (`LIMINAL_LOGIN_SCOPE: "https://${LIMINAL_REMOTE_HOST:-localhost}"`). A domain's login has no user without a
+  password. Its users are kept by domain (the volume's `login/<host>/`): a container made from the recipe before
+  this kept them in `login/` itself, and starts here without them.
+- LIMINAL_LOGIN_SCOPE is the command line's alone (the user, 2026-11-24). `liminal-login`'s commands read it in one
+  place (`cli._scope`, `cli.scoped`): `serve` and `user` in the same folder, `status`, `mail check` and `server` of
+  the same login, `mail dkim`'s key in the same folder; `mail setup` writes the file's own scope back. A login made in
+  code never reads it, so a variable left set on a machine cannot turn the login an app holds (the platform's, the
+  charts') into a domain's, with other users in another folder.
+- A domain's login makes no account without a session or a mailed code, not even its first. `POST /api/users` answers
+  403 with how the first user is made (`liminal-login user add NAME` at its machine; in Docker `docker compose exec
+  login liminal-login user add NAME`) and 401 once it has users. Until now a domain's login without an email server
+  made its first account for whoever asked first. The page's Sign up says why instead of drawing the form, and
+  `user list` with no users yet no longer names the page's first visit there.
+- Only at the login's own machine: a sign-in without a password (`POST /api/sign-in/secret`; another login's secret
+  user, asked there, too) and an account made without a session on a local login are refused (403) unless the request
+  was sent from this machine itself and not handed on by a front (liminal-libs' `web.from_this_machine`: a loopback
+  peer, no X-Liminal-Front and, as a net under the mark, no X-Forwarded-For or X-Forwarded-Proto). The front marks
+  every request it hands on (docker/Caddyfile: `header_up X-Liminal-Front 1`). A page here, a program here, an app's
+  front passing a page's request on and a login an app holds are answered as before.
+- Secure behind TLS: when the front says the browser came over https (X-Forwarded-Proto), every cookie the login sets
+  or clears is Secure.
+- Published on this machine alone unless said: compose.yaml's port is
+  `${LIMINAL_REMOTE_BIND:-127.0.0.1}:${LIMINAL_REMOTE_PORT:-8443}:8443`, and `LIMINAL_REMOTE_BIND` names a wider
+  address (`0.0.0.0`, or one of the machine's).
+- Sign-ins with a password are throttled (throttle.py; the user, 2026-11-24: it stays as built). After 10 wrong
+  passwords for one name, or 30 from one address, within 15 minutes, the next from there or for that name is answered
+  429 with Retry-After, before any key is derived or another login is asked, until the oldest is 15 minutes old.
+  Counted in memory (a restart forgets), in at most 4096 counters; this machine's own counted too, apart from those of
+  what a front hands on; a wrong password at another login (name@their.domain) counted here as well. The secret user
+  and `default`, in without a password, never wait. `LoginApp(throttle=...)` takes one of a test's own.
+- The README has the deploy steps (LIMINAL_REMOTE_HOST, LIMINAL_REMOTE_PORT, LIMINAL_REMOTE_BIND, the first user, how
+  sign-up by email is opened and what that means), what a front of one's own must set (the mark, and nginx's lines in
+  full), and its lines on the first user say what is now so.
+- What changes here once the login is started again: ten wrong passwords for a name at this machine, or thirty in
+  all, make the next sign-ins with a password wait up to 15 minutes; a domain's login without an email server takes its
+  first user from `liminal-login user add NAME`, not from the page; a name typed with an address after its @
+  (name@http://...) is refused; and a request that carries X-Forwarded-For or X-Forwarded-Proto is no longer at the
+  machine (liminal-libs 1.98.0: a browser behind something that adds them loses the secret user's way in).
+
+Reviewed before landing: three lenses (security, what it breaks, whether the tests can fail), each finding put to a
+second check. Eighteen held, thirteen of them distinct. Through the recipe's own front none reopened a way in without a
+password; one, the library's, was about a front set up without the mark (liminal-libs 1.98.0's net under it). The
+throttle's numbers and where they apply are as built. Put right here:
+- The limits hold for sign-ins sent together. A failed sign-in was counted only once its key had been derived, so the
+  sign-ins of a burst each found nothing counted yet and every one was tried: 200 passwords for one name where 10
+  were meant, and again every 15 minutes. A try is now counted before its key is derived, in the same hold of the lock
+  that asks whether it must wait, and taken back unless the name or the password was wrong (`Throttle.tried`,
+  `forget`). Made one after another, sign-ins are answered as before.
+- The keys derived at once are bounded (`Throttle.deriving`, `AT_ONCE`): four from a front and four from this
+  machine, the others waiting their turn, so a burst cannot take the machine's memory (32 MB a key) and, with the
+  process, the counts. The secret user's way in asks for no turn.
+- A user of another login is counted once, however their domain is typed. `ada@remote.test.` and ` ada @ remote.test`
+  were names of their own to count, as often as wanted, though their login is asked for the same user.
+- A host typed in a name is a domain, never an address (`LoginApp.remote_url`). `name@http://127.0.0.1:8795`, typed
+  through a front, had the login ask itself over http as a program at its own machine: the try was counted as the
+  machine's own, so whoever reached the front had the machine's tries beside the front's and could make every sign-in
+  with a password at the machine wait. An address is taken from `[remotes]` alone; typed with a scheme it is answered
+  400, and nothing is asked or counted.
+- The page's Sign in form goes on to the way in without a password after a 429 as after a 401 (login.js). It stopped
+  there, so the secret user and `default`, typed with anything in the password box, were told to wait once their
+  name's ten or the machine's thirty had failed, though the login would let them in at once.
+- A liminal-libs older than the one it needs is said in words (`LIBS_FLOOR`, 503 from every route). The floor is
+  pip's to check, and an editable install made without its dependencies runs whatever its checkouts hold: every
+  sign-in answered 500 with the reason in the log alone. The library is to be landed, pulled and pushed before this.
+- The README gives nginx its lines in full. Its one line set the mark alone, and nginx writes no X-Forwarded-For or
+  X-Forwarded-Proto of its own and hands a client's on: the counts then went by an address the client wrote, and the
+  cookie was not Secure.
+- Three tests that could not fail: a second published port beside the first is now seen (the whole list under
+  `ports:` read as text; the PyYAML half runs nowhere PyYAML is not installed, which is here and in CI); the frame's
+  refusals behind the front are asked of a route that answers a front's own page; and `serve` itself is run with the
+  scope said, not rebuilt by hand.
+
+Its last check (2026-11-25) found one more, rated medium, closed here before landing (the user, the same day: "Closed
+unless turned on", and wrong codes to count toward the sign-in throttle). Made a domain's so that it has no user
+without a password, the container took sign-ups by a mailed code as soon as its host had a mail record (MX), with
+nothing else set: a domain's login with no `[mail]` sends direct, and its sign-up routes had no mark, gate or count.
+The six-digit code could be guessed, five tries with each code and a new code at once after the fifth: an account
+with no session and no mailbox.
+- Sign-up by email has a switch, `signup = open` or `signup = closed` under the file's `[login]`, and the recipe ships
+  closed: docker/liminal-login.cfg says `signup = closed`, and compose.yaml says `LIMINAL_LOGIN_SIGNUP: "closed"` for a
+  copy of that file from before the line. Closed, the status and every step of a sign-up (`/api/signup`, `resend`,
+  `verify`, `complete`: 503) say how it is opened, through the front and at the machine, whatever mail record the host
+  has, and no mail record is asked for. A deployer opens it with `signup = open` in the file, which is over
+  compose.yaml's word; the README's Docker steps say how, and what it means. The variable only closes, whatever it
+  says, and is the command line's alone, as LIMINAL_LOGIN_SCOPE is: `serve` reads it (`cli.signup_told`) and hands it
+  to the login it makes (`LoginApp(signup=...)`), and a login made in code never reads it. A word in the file that is
+  neither closes, and the page says so; `serve`'s first line says closed too.
+- What a login with no such line does: as it did, a domain's taking sign-ups when it has an email server (the user,
+  2026-11-06), unless its command line was told closed. Why not closed everywhere: a domain's login set up by hand
+  (`init`, `mail setup`) was tied to its mail server so that its users sign up, and `init` says so as it writes the
+  file; closed at an update, it would stop taking the sign-ups its owner asked for, and the answer of 2026-11-25 is
+  about the recipe. The container gets its default from compose.yaml, so an older file there is closed too. The
+  other reading, every domain's login closed until its file says open, is put to you below.
+- The logins on this machine are local: no sign-up by email before or after, and they read neither the line nor the
+  variable. Their page and their ways in are as they were. Of a sign-up's routes, which only ever refuse there,
+  `resend` and `verify` answer 429 like a sign-in where the caller is already held back for failed sign-ins.
+- `mail setup` keeps the line. It writes the file back through the library's Scope, which knows no such line, so a
+  `closed` its owner wrote would have gone with the next `mail setup`, and the login taken sign-ups again.
+- A sign-up's wrong codes count in the throttle, in the counts of the wrong passwords and with their numbers: by the
+  address they came from (the machine's own apart from a front's) and by the email the code was mailed to. Past
+  either, a code typed is answered 429 with Retry-After before it is looked at; it is counted before it is compared
+  and taken back unless it was wrong. While an email or an address waits no new code is sent for it either
+  (`/api/signup`, `/api/signup/resend`: 429, nothing mailed), so a new code gives no tries back.
+- A code whose five tries are spent keeps its sign-up (users.py: `WrongCode`, `_refuse_again`). The sign-up was
+  dropped at the fifth wrong code and the next begun at once: five more tries, and a second message inside the
+  minute. Now the code is compared no more, the right one neither, and the next goes out no sooner than a minute
+  after that last try, however late it came (the row's `sent_at` is moved there, and the row lives that minute at the
+  least; no column is added). A sign-up already verified is no longer wiped by wrong codes sent after it. The page
+  keeps the sign-up, and its "Send it again" works once the minute is over (what is said no longer holds the words on
+  which the page let the sign-up go).
+- The secret user and `default` are as they were: their way in asks nothing of this.
+
+Said, and left as they are, each put to you (the first three are the throttle's, which stays as built):
+- More names and addresses failing within 15 minutes than there are counters (4096) make the oldest counts forgotten.
+  With the limits holding for bursts that takes about 133 addresses kept up. Never dropping a live counter would make
+  a flood hold back the sign-ins of everyone new instead.
+- An account's email, typed in place of its name, is counted apart: 20 tries for an account that has one. Counted
+  together, whoever spent a name's ten would learn which address is its account's, and its owner could no longer come
+  in by the other.
+- Where every client reaches the front from one address (the port published on 127.0.0.1, Docker Desktop, rootless
+  Docker, an engine inside WSL reached from Windows, a tunnel on the host), the 30 from one address are everyone's
+  together. The README's Docker steps and the comments in docker/ say so. Not seen in Docker: none is on this machine.
+- `status`, `mail check`, `server` and `mail dkim`'s folder read LIMINAL_LOGIN_SCOPE as `serve` and `user` do. The
+  answer of 2026-11-24 named `serve` and `user`: with the variable left set in a shell, `mail check` checks and mails
+  the admin of the variable's domain. Inside the container `status` and `mail check` have to read it to speak of the
+  login served.
+
+Answered 2026-11-25: these four stay as they are, and every command of `liminal-login` reads LIMINAL_LOGIN_SCOPE while
+no login an app holds does. From the last check's fix, put to you the same way:
+- Whether every domain's login should be closed until its file says `signup = open`, not the container's alone. As
+  built, one made by hand with no `signup` line takes sign-ups when its domain has an email server, as it did, and its
+  owner closes it with `signup = closed`.
+- With sign-up open, wrong codes are a second way to an address's thirty: where every client reaches the front from
+  one address, thirty of them make every sign-in with a password through it wait, as thirty wrong passwords do. That
+  is the one count asked for; counted apart, an address would have thirty wrong codes beside its thirty wrong
+  passwords.
+- The library's Scope keeps no `signup` line (of the library, only the headers its fronts pass back were to change
+  for this): the login reads the file itself, `init` writes no such line, and `status` does not say whether sign-up is
+  open (the page, `/api/status` and `serve`'s first line do).
+
+Tests: tests/test_docker_files.py (3 tests became 14: the files as text, the front's requests and this machine's
+against the app, the container's login as `serve` makes it with its first user from `user add`, the scope said to the
+command line and never read by a login made in code or held by an app; the recipe as shipped taking no sign-up by
+email on a host with a mail record, the file's line opening it, a copy of the file from before the line closed by
+compose.yaml's word, each on the login `serve` itself makes), tests/test_throttle.py (11: the counts, a try counted
+and taken back, sign-ins sent together and the keys derived at once by their order, another login's user, a host
+typed as an address; wrong codes by the address and by the email, a new code giving no tries back, codes typed
+together by their order), tests/test_signup.py (the switch's words, and a spent code keeping its sign-up),
+tests/test_cli.py (`mail setup` keeping the line) and, in tests/test_app.py, the page's line after a 429 and a
+library older than the floor. No message is sent and no name looked up: the mailer and the mail record are stand-ins.
+
 ## 0.19.0 (2026-11-25)
 
 Where the users are as a preference, and a local fallback (the user, 2026-11-25: "sqlite for now, but the user
