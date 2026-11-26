@@ -21,7 +21,9 @@ takes sign-ups unless its switch closes them (0.20.0: its file's `signup` line, 
 was told), and a wrong code is counted as a wrong password is (throttle.py). Sessions live in
 memory: a token in the page's cookie and in a client's X-Liminal-Session header, the user's vault
 open for the session's life and closed at sign-out or once idle too long. The routes are the page's
-and the library's LoginClient's."""
+and the library's LoginClient's, each a row of routes.py. Its own External API (apis.py) and Internal API
+(GET /api/app/apis, the frame's, 0.20.1) are shown to one of its own users signed in to a local login, as its
+code base is."""
 from __future__ import annotations
 
 import configparser
@@ -45,13 +47,14 @@ from liminal_libs import layout, web
 from liminal_libs.apps import (PAIRS_PATH, REMOTES_VAR, SESSION_HEADER, SUPER_TITLE_VAR, SUPER_URL_VAR, SUPER_VAR, App,
                                Refused, Scope, remotes_from)
 from liminal_libs.apps import remote_url as remote_address
-from liminal_libs.apps.app import CODEBASE_PATH as CODEBASE
+from liminal_libs.apps.app import APIS_PATH, CODEBASE_PATH as CODEBASE
 from liminal_libs.layout import data_dir
 from liminal_libs.mail import MailError, Mailer, mask, mx_records
 from liminal_libs.web import WRITE_HEADER
 from liminal_libs.apps import asking
 from liminal_libs.sources.plugin import Keystore, LoginPlugin, LoginRefusal, UsersPlace, Viewer
 from . import __version__
+from .routes import ROUTES
 from .throttle import Throttle
 from .users import CODE_MINUTES, DEFAULT_NAME, User, UserStore, WrongCode
 from .vault import PAIR_NAME, KeyPairStore, VaultClosed, store_file
@@ -92,6 +95,8 @@ NOT_PASSWORDLESS = "only the secret and the default users come in without a pass
 PLUGIN_KEPT = "plugin:"
 PLUGINS_PATH = "/api/login-plugins"  # GET: the login's plugins; /<name>/<tab>: GET its page, POST a change on it
 ADMIN_ONLY = "only this login's admin, its secret user, may change this: anyone signed in sees it"
+# its own External and Internal API (0.20.1) on a domain's login: refused, as its code base is
+NO_OWN_APIS = "a domain's login shows no API views of its own: its users are anyone who signs up"
 # Only at the login's own machine (LOG-C1, 2026-11-23; the user: "The two high ones"): a sign-in without a password and
 # an account made without a session are a program's here, sent from this machine itself and not handed on by a front
 # (liminal_libs.web.from_this_machine). docker/'s front, in the login's own network, connects from 127.0.0.1 as a page
@@ -313,6 +318,44 @@ class LoginApp(App):
     STATIC = Path(__file__).parent / "static"
     API = "1.3"  # 1.3 (0.13.0): on its own unless inherited; `for` null on its own, `superclass` in the status
     READ_HOOKS = ("page", "place")  # its plugins' hooks that only read (0.18.0): noted as reads in who talks to whom
+    # its own two views (0.20.1, Monday list item 17; liminal-libs 1.63.0's App): its routes (routes.py), the apps it
+    # reaches, what its code calls and reads on its plugins (held to this file by tests/test_api_views.py) and a few
+    # words; its External API is `apis` (apis.py). Shown to one of its own users signed in to a local login (_api)
+    ROUTES = ROUTES
+    LINKED = (
+        ("its superclass", "the app it is run for on its own (LIMINAL_LOGIN_FOR, with its title and address): asked "
+                           "at that address for the pairs its plugins ask for (GET /api/login/pairs), a minute apart "
+                           "at the most. Held by that app as an object, it asks the app itself, in its process",
+         SUPER_URL_VAR),
+        ("other logins", "a user of another domain's login (name@their.domain) is signed in there and asked there over "
+                         "https, its certificate checked: who they are, their password, their pairs; a domain not named "
+                         "under [remotes] answers at https://its.domain", REMOTES_VAR),
+    )
+    CALLS = {
+        "login": {
+            "page": "a tab drawn for the one signed in (GET /api/login-plugins/{name}/{tab}), asked by name with who "
+                    "they are and what the plugin keeps here: never a value of their pairs",
+            "change": "a change asked on a tab (POST /api/login-plugins/{name}/{tab}), after the admin's check on a tab "
+                      "only the admin may change; what it says to keep is kept in the login's own settings",
+            "place": "where the login's users are, from what the plugin keeps here: read once as the login starts",
+            "gives": "whether it answers place, before place is asked",
+            "tab": "one of its tabs by its id, for the route that names it",
+        },
+    }
+    ATTRIBUTES = {  # read, never called
+        "login": ("app", "name", "title", "about", "version", "ICON", "TABS"),
+    }
+    INTERNAL_NOTES = (
+        "On its own it answers at its own port (8795). Held by an app (the platform, the charts, the integrator) it is an "
+        "object of this class made in that app's process: its page and its API under /login/ at that app's port, no "
+        "port of its own, its users that app's own folder here, the pairs its plugins ask for asked of that app itself.",
+        "Its users and their vaults are in its own folder (users.db, users/), unless one of its plugins points it at "
+        "another place as it starts (place). A session is a token in the page's cookie or in a client's "
+        "X-Liminal-Session header (the library's LoginClient); the user's vault stays open for the session's life.",
+        "Its own two views and its code base are shown to one of its own users signed in to a local login: a domain's "
+        "login shows neither (its users are anyone who signs up), and a user of another login is sent to their own. "
+        "Its plugins' two views are the frame's, as every app answers them.",
+    )
 
     def __init__(self, directory: Path | None = None, log=print, failure_delay: float = FAILURE_DELAY_S, mailer=None,
                  superclass: Superclass | str | None = None, scope: Scope | None = None, remotes: dict | None = None,
@@ -381,6 +424,14 @@ class LoginApp(App):
     def describe(self) -> dict:
         return {**super().describe(), "for": self.namespace, "forTitle": self.title_for,
                 "superclass": self.superclass.describe() if self.superclass is not None else None, "scope": self.scope.describe()}
+
+    @property
+    def apis(self) -> tuple:
+        """What the login's own code associates with, for its own External API (apis.py, 0.20.1): imported when first
+        asked, so a login made in another app's process loads nothing more for it."""
+        from .apis import APIS
+
+        return APIS
 
     @property
     def holder(self):
@@ -1079,6 +1130,12 @@ class LoginApp(App):
             self._require(handler)
             if self.scope.kind == "domain":
                 raise Refused(HTTPStatus.FORBIDDEN, "a domain's login shows no code base: its users are anyone who signs up")
+        if path == APIS_PATH and method == "GET" and not query.get("plugin"):
+            # its own two views (0.20.1; Monday list item 17): what its code calls, its routes and what it associates
+            # with, for the same users as its code base. A plugin's two (?plugin=NAME) are the frame's, as before
+            self._require(handler)
+            if self.scope.kind == "domain":
+                raise Refused(HTTPStatus.FORBIDDEN, NO_OWN_APIS)
         if path in REMOTE_ROUTES or (path.startswith("/api/pairs/") and path != "/api/pairs/known"):
             s = self.session(handler)
             if isinstance(s, RemoteSession):  # a user of another login: asked there (0.15.0)
