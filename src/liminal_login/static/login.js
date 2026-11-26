@@ -104,12 +104,16 @@
   let plugins = [];  // [{name, title, about, icon, version, tabs: [{id, title, admin}]}], as the login lists them
   let pluginTab = {};  // the tab shown of each plugin, by its name
   const A = window.LiminalApis || null, I = window.LiminalInternal || null;  // the library's (1.49.0, 1.63.0)
+  // This app (0.20.1; Monday list item 17): the login's own External and Internal API, the last entry of the list, for
+  // the same users as Codebase (one of its own signed in to a local login) and never in another app's page (render)
+  let mayOwn = false;
   function listHtml(withCodebase) {
     const item = (id, ic, title, sub) => `<button type="button" class="item${view === id ? ' active' : ''}" data-view="${esc(id)}">${icon(ic, 20)}
       <span class="what"><span>${esc(title)}</span><span class="sub">${esc(sub)}</span></span></button>`;
     return `<nav class="app-list" id="list" aria-label="The login's views">${item('account', 'key', 'Your account', 'who you are, your keys and accounts')}`
       + plugins.map((p) => item(`plugin:${p.name}`, p.icon || 'plug', p.title || p.name, p.about || '')).join('')
-      + `${withCodebase ? item('codebase', 'branch', 'Codebase', 'its repositories, its code, by language') : ''}</nav>`;
+      + `${withCodebase ? item('codebase', 'branch', 'Codebase', 'its repositories, its code, by language') : ''}`
+      + `${mayOwn ? item('app', 'sort', 'This app', 'its own External and Internal API') : ''}</nav>`;
   }
   function columns(data, side, withCodebase = true) {
     main.classList.add('cols');
@@ -142,8 +146,10 @@
     const mayCodebase = !me.remote && !(st.scope && st.scope.kind === 'domain');
     try { plugins = embedded ? [] : ((await api('GET', 'api/login-plugins')).plugins || []); } catch (e) { plugins = []; }  // a login before 0.18.0: none
     const withCodebase = !!C && mayCodebase;
-    const listed = !embedded && (withCodebase || plugins.length > 0);
+    mayOwn = !!I && mayCodebase && !embedded;
+    const listed = !embedded && (withCodebase || mayOwn || plugins.length > 0);
     if (listed && view === 'codebase' && withCodebase) { columns('', ''); showCodebase(); return; }
+    if (listed && view === 'app' && mayOwn) { columns('', '', withCodebase); return showOwn(me); }
     const picked = view.startsWith('plugin:') ? plugins.find((p) => `plugin:${p.name}` === view) : null;
     if (listed && picked) { columns('', '', withCodebase); return showPlugin(picked, me); }
     if (view !== 'account') view = 'account';  // a plugin that is gone, or the code base where it is not shown
@@ -190,6 +196,37 @@
       wireActs(p, shown, me);
     } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   }
+  // -- This app: the login's own two views (0.20.1), External API then Internal API beside its title, asked only while
+  // shown (api/app/apis, relative: under another app's /login/ it is the login's own). A login from before answers the
+  // frame's defaults (no route of its own, no card), one older still 404: said in words, never an empty tab
+  let ownTab = 'external';
+  const OWN_OLDER = 'This login was started before it could show its own APIs: restart it (or the app that holds it) to see them.';
+  async function showOwn(me) {
+    const list = [...(A ? [{ id: 'external', title: 'External API' }] : []), { id: 'internal', title: 'Internal API' }];
+    if (!list.some((t) => t.id === ownTab)) ownTab = list[0].id;
+    titled(`This app: ${(list.find((t) => t.id === ownTab) || {}).title || ''}`);
+    const data = $('data'), side = $('side');
+    const facts = (d) => `<dl class="facts">${d && d.title ? `<dt>App</dt><dd>${esc(d.title)}</dd>` : ''}${d && d.api ? `<dt>Its API</dt><dd>${esc(d.api)}</dd>` : ''}
+      ${d && d.url ? `<dt>At</dt><dd class="mono">${esc(d.url)}</dd>` : ''}<dt>You</dt><dd>${esc(me.name)}${me.admin ? " (this login's admin)" : ''}</dd></dl>`;
+    side.innerHTML = `<h2>This app</h2><p class="muted">The login itself: what its code associates with, and what it offers its plugins and the apps that hold it.</p><div id="ownFacts">${facts(null)}</div>`;
+    data.innerHTML = `<h1>This app</h1>${tabsHtml(list, ownTab)}<div id="ownBody"><p class="muted">Asking…</p></div>`;
+    data.querySelectorAll('[data-api-tab]').forEach((b) => b.addEventListener('click', () => {
+      ownTab = b.dataset.apiTab;
+      showOwn(me);
+    }));
+    const body = $('ownBody');
+    let d;
+    try { d = await api('GET', 'api/app/apis'); }
+    catch (e) { body.innerHTML = `<p class="${e.status === 404 ? 'muted' : 'error'}">${esc(e.status === 404 ? OWN_OLDER : e.message)}</p>`; return; }
+    if (view !== 'app' || !$('ownBody')) return;  // another entry picked while it was asked
+    const inner = d && d.internal;
+    if (!inner || !(inner.counts && inner.counts.own > 0)) { $('ownBody').innerHTML = `<p class="muted">${esc(OWN_OLDER)}</p>`; return; }
+    if ($('ownFacts')) $('ownFacts').innerHTML = facts(d.app || {});
+    $('ownBody').innerHTML = ownTab === 'external'
+      ? A.html(d.apis || [], d.apiFacts || {}, { fold: true, title: 'The APIs and SDKs it associates with', empty: 'Nothing it associates with is said yet.' })
+      : I.html(inner, { owner: 'app:login', title: 'What it offers its plugins and the apps that hold it', app: 'the login' });
+  }
+
   // what a plugin's tab shows: its title and note, its facts, its forms (0.19.0: a change made of fields, asked as a
   // row's is), its tables (a row's `act`: a change asked in the row)
   const ASKS = '<span class="ask" hidden><span class="words"></span> <button type="button" class="yes accent">Yes</button><button type="button" class="no">No</button></span>';

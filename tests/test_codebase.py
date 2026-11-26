@@ -116,7 +116,8 @@ def test_the_page_lists_the_account_and_codebase_and_hands_codebase_the_two_pane
     assert "const mayCodebase = !me.remote && !(st.scope && st.scope.kind === 'domain');" in page
     # 0.18.0: the list is drawn for the code base or the login's plugins, each shown only where it may be
     assert "const withCodebase = !!C && mayCodebase;" in page
-    assert "const listed = !embedded && (withCodebase || plugins.length > 0);" in page
+    # 0.20.1: and for This app, the login's own two views (tests/test_api_views.py)
+    assert "const listed = !embedded && (withCodebase || mayOwn || plugins.length > 0);" in page
     assert "main.innerHTML = userCard(me) + storeFacts(me) + rest;" in page
     assert "columns(userCard(me) + rest, storeFacts(me), withCodebase);" in page
     assert "plugins = embedded ? [] : ((await api('GET', 'api/login-plugins')).plugins || []);" in page

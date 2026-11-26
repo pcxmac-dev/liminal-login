@@ -157,3 +157,21 @@ def test_its_calls_and_attributes_are_what_its_code_takes_of_its_plugins():
     assert set(LoginApp.CALLS) == {"login"} and set(LoginApp.ATTRIBUTES) == {"login"}
     assert set(LoginApp.CALLS["login"]) == called | asked
     assert set(LoginApp.ATTRIBUTES["login"]) == taken - called
+
+
+def test_the_page_lists_this_app_last_for_whom_codebase_is_shown_and_never_embedded():
+    page = (LoginApp.STATIC / "login.js").read_text(encoding="utf-8")
+    entry = "${mayOwn ? item('app', 'sort', 'This app', 'its own External and Internal API') : ''}</nav>"
+    assert entry in page and page.index("item('codebase', 'branch', 'Codebase'") < page.index(entry)  # last, after it
+    assert "mayOwn = !!I && mayCodebase && !embedded;" in page  # its own users on a local login, never in another page
+    assert "if (listed && view === 'app' && mayOwn) { columns('', '', withCodebase); return showOwn(me); }" in page
+    # its two tabs beside its title, asked only while shown, relative (under another app's /login/: the login's own)
+    assert "d = await api('GET', 'api/app/apis');" in page and "api('GET', '/api/app/apis')" not in page
+    assert "{ id: 'external', title: 'External API' }" in page and "{ id: 'internal', title: 'Internal API' }" in page
+    assert "I.html(inner, { owner: 'app:login'" in page and "A.html(d.apis || [], d.apiFacts || {}, { fold: true" in page
+    # a login from before: the frame's defaults (no route of its own) or a 404, said in words
+    assert "if (!inner || !(inner.counts && inner.counts.own > 0))" in page
+    assert "This login was started before it could show its own APIs: restart it (or the app that holds it)" in page
+    assert "e.status === 404 ? OWN_OLDER : e.message" in page
+    html = (LoginApp.STATIC / "index.html").read_text(encoding="utf-8")
+    assert html.index('src="apis.js"') < html.index('src="internal.js"') < html.index('src="login.js"')
