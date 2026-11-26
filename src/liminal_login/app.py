@@ -1132,10 +1132,14 @@ class LoginApp(App):
                 raise Refused(HTTPStatus.FORBIDDEN, "a domain's login shows no code base: its users are anyone who signs up")
         if path == APIS_PATH and method == "GET" and not query.get("plugin"):
             # its own two views (0.20.1; Monday list item 17): what its code calls, its routes and what it associates
-            # with, for the same users as its code base. A plugin's two (?plugin=NAME) are the frame's, as before
+            # with, for the same users as its code base
             self._require(handler)
             if self.scope.kind == "domain":
                 raise Refused(HTTPStatus.FORBIDDEN, NO_OWN_APIS)
+        elif path == APIS_PATH and method == "GET" and self.session(handler) is None:
+            # a plugin's two (?plugin=NAME, the frame's, since 0.18.0) ask a session, as its plugins' list and pages do
+            # (the user, 2026-11-26: "A signed-in session"); any signed-in user, a user of another login too
+            raise Refused(HTTPStatus.UNAUTHORIZED, "not signed in")
         if path in REMOTE_ROUTES or (path.startswith("/api/pairs/") and path != "/api/pairs/known"):
             s = self.session(handler)
             if isinstance(s, RemoteSession):  # a user of another login: asked there (0.15.0)

@@ -12,7 +12,9 @@ apps"). Its plugins have had theirs since 0.18.0; the login itself now has its o
   /login/ it is the login's own). A login from before answers the frame's defaults: the page says to restart it.
 - `GET /api/app/apis` without `?plugin=` answers 401 to nobody signed in, 403 to a user of another login and on a
   domain's login (its users are anyone who signs up), as `GET /api/codebase` does. With `?plugin=NAME`, a plugin's two
-  views are answered as before.
+  views now ask a session, as `GET /api/login-plugins` does (the user, 2026-11-26: "A signed-in session"): 401 to
+  nobody signed in, answered to any signed-in user (a user of another login too). Until now anyone at this machine
+  could read them.
 - Its Internal API lists its own routes first (routes.py: the 20 it answers, then the frame's three it narrows), the
   frame's after them; the apps it reaches (the app it is run for, at its address; other domains' logins, over https);
   what its code calls and reads on its plugins (page, change, place, gives, tab; their names, titles, tabs and icon);

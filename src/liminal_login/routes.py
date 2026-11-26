@@ -60,5 +60,5 @@ ROUTES = (
      "page"),
     ("GET", "/api/app/apis", "its own External and Internal API: for one of its own users signed in to a local login, "
                              "never on a domain's login; with ?plugin=NAME, one of its plugins' two (as the frame "
-                             "answers them)", "read", "page"),
+                             "answers them), for anyone signed in", "read", "page"),
 )

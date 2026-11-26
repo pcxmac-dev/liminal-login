@@ -1,7 +1,8 @@
 """The login's own two views (0.20.1; Monday list item 17; the user, 2026-11-16: "for all apps, and all plugins, there
 should be an external api tab, and an internal api tab"): GET /api/app/apis, the frame's, answered here only to one of
-its own users signed in to a local login, as its code base is; a plugin's two (?plugin=NAME) as before. The login on a
-free port in a thread, stand-in mail; nothing of a plugin is asked, nothing reached outside this machine."""
+its own users signed in to a local login, as its code base is; a plugin's two (?plugin=NAME) to anyone signed in. The
+login on a free port in a thread, stand-in mail; nothing of a plugin is asked, nothing reached outside this
+machine."""
 from __future__ import annotations
 
 import ast
@@ -87,7 +88,7 @@ def test_a_user_of_another_login_is_sent_to_their_own(served):
     assert status == 403 and "another login" in said["error"]
 
 
-def test_a_plugins_two_views_are_asked_as_before(folder):
+def test_a_plugins_two_views_ask_a_session(folder):
     from test_login_plugins import Probe
 
     app = LoginApp(folder, log=lambda m: None, failure_delay=0, login_plugins=[Probe()])
@@ -95,12 +96,14 @@ def test_a_plugins_two_views_are_asked_as_before(folder):
         port = int(app.start(0).split("127.0.0.1:", 1)[1].split("/", 1)[0])
         token = _secret(port)
         assert _get(port, "/api/login-plugins", token)[0] == 200  # attached when first asked for
-        status, got = _get(port, "/api/app/apis?plugin=probe")  # the frame's, open as it was (question 1)
+        status, said = _get(port, "/api/app/apis?plugin=probe")  # the frame's, asked with a session (the user, 2026-11-26)
+        assert status == 401 and "not signed in" in said["error"]
+        status, got = _get(port, "/api/app/apis?plugin=probe", token)
         assert status == 200 and got["name"] == "probe"
         hooks = {h["name"]: h for h in got["internal"]["hooks"]}
         assert hooks["page"]["how"] == LoginApp.CALLS["login"]["page"]  # what the login's code does with it
         assert got["internal"]["attributes"] == list(LoginApp.ATTRIBUTES["login"])
-        assert _get(port, "/api/app/apis?plugin=nope")[0] == 404
+        assert _get(port, "/api/app/apis?plugin=nope", token)[0] == 404
     finally:
         app.close()
 

@@ -82,8 +82,9 @@ def test_its_plugins_are_attached_when_asked_and_let_go_at_the_stop(folder):
         assert status == 200 and out["admin"] is False and out["plugins"][0]["name"] == "probe"
         assert [t["id"] for t in out["plugins"][0]["tabs"]] == ["mine", "global"] and out["plugins"][0]["tabs"][1]["admin"]
         assert probe.app is app and app.plugin("probe") is probe
-        # its two API views, as every app's plugins have them (the frame's route)
-        status, apis, _ = _call(port, "GET", "/api/app/apis?plugin=probe")
+        # its two API views, as every app's plugins have them (the frame's route), asked with a session (0.20.1)
+        assert _call(port, "GET", "/api/app/apis?plugin=probe")[0] == 401
+        status, apis, _ = _call(port, "GET", "/api/app/apis?plugin=probe", token=d)
         assert status == 200 and apis["name"] == "probe" and apis["internal"]
         assert _call(port, "GET", "/api/login-plugins/nope/mine", token=s)[0] == 404
         assert _call(port, "GET", "/api/login-plugins/probe/nope", token=s)[0] == 404

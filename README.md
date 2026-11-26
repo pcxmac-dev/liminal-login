@@ -283,7 +283,8 @@ than the one the login needs (1.98.0) every one of them answers 503 and says so 
 associates with (src/liminal_login/apis.py), its routes (routes.py, then the frame's), the apps it reaches and what its
 code calls on its plugins. Like `GET /api/codebase`, it is answered to one of its own users signed in to a local login
 alone: 401 signed out, 403 to a user of another login and on a domain's login. `GET /api/app/apis?plugin=NAME` is one of
-its plugins' two views, as every app answers them.
+its plugins' two views, as every app answers them, asked with a session as its plugins' list and pages are (401
+signed out; any signed-in user, a user of another login too).
 
 ## Its plugins (0.18.0)
 
