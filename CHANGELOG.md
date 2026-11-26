@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.20.1 (2026-11-26)
+
+The login's own External and Internal API (Monday list item 17; the user, 2026-11-16: "for all apps, and all plugins,
+there should be an external api tab, and an internal api tab, the internal api is for interfaces the plugin shares with
+the rest of the app, the external should be all the SDKs/APIs the plugin associates with"; 2026-11-17: "all plugins all
+apps"). Its plugins have had theirs since 0.18.0; the login itself now has its own two, as the platform has.
+- "This app", the last entry of the page's list after Codebase, with External API and Internal API beside its title.
+  It is drawn for the same people as Codebase, one of the login's own users signed in to a local login, and never in
+  another app's page. Each tab is asked only while it is shown, at `api/app/apis` (relative: under another app's
+  /login/ it is the login's own). A login from before answers the frame's defaults: the page says to restart it.
+- `GET /api/app/apis` without `?plugin=` answers 401 to nobody signed in, 403 to a user of another login and on a
+  domain's login (its users are anyone who signs up), as `GET /api/codebase` does. With `?plugin=NAME`, a plugin's two
+  views are answered as before.
+- Its Internal API lists its own routes first (routes.py: the 20 it answers, then the frame's three it narrows), the
+  frame's after them; the apps it reaches (the app it is run for, at its address; other domains' logins, over https);
+  what its code calls and reads on its plugins (page, change, place, gives, tab; their names, titles, tabs and icon);
+  and a few words on how it is held and where its users are.
+- Its External API (apis.py) is the cards of what its own code associates with: SQLite through Python's sqlite3, its
+  users and vaults; nslookup, a domain's mail record; Docker, `liminal-login server`'s mail server container; git, its
+  Codebase. Every address is one already read for a card that landed before, with that card's day. Not yet a card, for
+  want of a maker's page read for it: SMTP submission and IMAP (the library's mail.py and mailbox.py), the cryptography
+  package's AES-GCM and scrypt, DKIM, Caddy and Windows' Credential Manager.
+- Tests: tests/test_routes.py (the rows held to app.py), tests/test_api_views.py (who is answered, the cards, no other
+  module naming an outside host, what it calls on its plugins held to app.py, the page's lines).
+
 ## 0.20.0 (2026-11-25)
 
 The remote login in Docker no longer lets in, as its admin, anyone who reaches it: LOG-C1 of the independent review

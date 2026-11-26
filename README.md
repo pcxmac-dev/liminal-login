@@ -279,6 +279,12 @@ wrong),
 `GET /api/app`, `GET /api/login-plugins`, `GET|POST /api/login-plugins/<name>/<tab>` (0.18.0). On a liminal-libs older
 than the one the login needs (1.98.0) every one of them answers 503 and says so (0.20.0).
 
+`GET /api/app/apis` is the login's own External and Internal API (0.20.1), the page's This app: what its own code
+associates with (src/liminal_login/apis.py), its routes (routes.py, then the frame's), the apps it reaches and what its
+code calls on its plugins. Like `GET /api/codebase`, it is answered to one of its own users signed in to a local login
+alone: 401 signed out, 403 to a user of another login and on a domain's login. `GET /api/app/apis?plugin=NAME` is one of
+its plugins' two views, as every app answers them.
+
 ## Its plugins (0.18.0)
 
 The login attaches the login plugins installed (liminal-libs 1.92.0's `LoginPlugin`; the first is
