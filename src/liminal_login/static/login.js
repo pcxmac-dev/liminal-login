@@ -103,7 +103,14 @@
   function sideRows() {  // the middle's rows picked into the panel, the pick told anew
     if (!sidePanel || !$('data')) return;
     S.rows($('data'), { selector: 'tr[data-pick]', panel: sidePanel, describe: (tr, key) => pickSpecs.get(key) || S.fromRow(tr) });
-    sidePanel.refresh((key) => pickSpecs.get(key) || null);
+    sidePanel.refresh(pickFind);
+  }
+  // what a pick is told anew from: its row's spec, else the row drawn now under its key (a row with no details is told
+  // by its cells, as when it was clicked); null only when no row carries the key any more
+  function pickFind(key) {
+    if (pickSpecs.has(key)) return pickSpecs.get(key);
+    const tr = [...$('data').querySelectorAll('tr[data-pick]')].find((x) => x.dataset.pick === key);
+    return tr ? S.fromRow(tr) : null;
   }
   const pickAttr = (key, spec) => {
     if (!S) return '';

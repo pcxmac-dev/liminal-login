@@ -61,3 +61,11 @@ def test_the_known_pairs_and_a_plugins_tables_pick_too():
 
 def test_codebase_is_mounted_with_the_panel():
     assert "panel: sidePanel, scope: 'login:codebase' });" in JS
+
+def test_a_row_without_details_is_told_anew_from_the_row_drawn_now():
+    """A row with no details, redrawn after an act, is still the pick: told by its cells, not marked gone."""
+    rows = body("function sideRows() {")
+    assert "sidePanel.refresh(pickFind);" in rows
+    find = body("function pickFind(key) {")
+    assert "if (pickSpecs.has(key)) return pickSpecs.get(key);" in find
+    assert "x.dataset.pick === key" in find and "return tr ? S.fromRow(tr) : null;" in find

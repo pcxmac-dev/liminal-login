@@ -10,6 +10,8 @@ picked in the middle told in full under it.
   value revealed in its row stays there. A pair a plugin asks for is told by its plugin, its variable and whether it is
   kept.
 - A plugin's tables: a row told by the table's `details` where the plugin gives them, else by its cells.
+- A row told by its cells stays the pick when its tab is drawn again (an act answered, its tab clicked): told anew
+  from the row drawn now under its key, marked no longer shown only when no row carries the key.
 - Codebase: the side on top, the repository picked under it.
 - A library without side.js (before 1.105.0): the side drawn whole, as before. No route changed.
 
