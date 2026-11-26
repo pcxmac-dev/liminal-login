@@ -21,9 +21,11 @@ apps"). Its plugins have had theirs since 0.18.0; the login itself now has its o
   and a few words on how it is held and where its users are.
 - Its External API (apis.py) is the cards of what its own code associates with: SQLite through Python's sqlite3, its
   users and vaults; nslookup, a domain's mail record; Docker, `liminal-login server`'s mail server container; git, its
-  Codebase. Every address is one already read for a card that landed before, with that card's day. Not yet a card, for
-  want of a maker's page read for it: SMTP submission and IMAP (the library's mail.py and mailbox.py), the cryptography
-  package's AES-GCM and scrypt, DKIM, Caddy and Windows' Credential Manager.
+  Codebase, each address one already read for a card that landed before, with that card's day; and, read on their
+  makers' pages on 2026-11-26 (the user's yes, "Yes, read them"): SMTP submission through smtplib and IMAP through
+  imaplib (the library's mail.py and mailbox.py: sign-up codes, `mail test`, `mail check`), AES-GCM and scrypt (the
+  vaults' seal, crypto.py), DKIM (`mail dkim`), Caddy (docker/'s https front) and Windows' Credential Manager (`mail
+  setup`'s passwords).
 - Tests: tests/test_routes.py (the rows held to app.py), tests/test_api_views.py (who is answered, the cards, no other
   module naming an outside host, what it calls on its plugins held to app.py, the page's lines).
 

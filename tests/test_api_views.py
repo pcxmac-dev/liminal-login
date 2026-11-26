@@ -114,7 +114,11 @@ URL = re.compile(r"\b(?:https?|wss?|ftp)://([A-Za-z0-9.-]+)")  # a scheme://host
 def test_its_cards_are_sound():
     assert problems(apis.APIS) == []
     assert {a.name for a in apis.APIS} == {"SQLite, through Python's sqlite3", "nslookup (the domain's mail record)",
-                                           "Docker (the mail server container)", "git"}
+                                           "Docker (the mail server container)", "git",
+                                           "SMTP submission, through Python's smtplib", "IMAP, through Python's imaplib",
+                                           "AES-GCM and scrypt (the cryptography package; Python's hashlib)",
+                                           "DKIM (the domain's signing key)", "Caddy (the remote login's https front)",
+                                           "Windows' Credential Manager"}
 
 
 def test_no_other_py_of_the_login_names_an_outside_host():
@@ -126,7 +130,8 @@ def test_no_other_py_of_the_login_names_an_outside_host():
     others = {h for f, h in found if f != "apis.py"}
     assert others <= {"127.0.0.1", "its.domain", "your-domain", "a.domain", "host", "localhost"}, others
     assert {"www.sqlite.org", "docs.python.org", "learn.microsoft.com", "bind9.readthedocs.io", "docs.docker.com",
-            "git-scm.com"} <= {h for f, h in found if f == "apis.py"}
+            "git-scm.com", "cryptography.io", "www.rfc-editor.org", "caddyserver.com"} <= {
+        h for f, h in found if f == "apis.py"}
 
 
 def _taken(tree, name: str) -> tuple[set[str], set[str]]:
