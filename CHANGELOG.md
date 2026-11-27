@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.2 (provisional)
+## 0.20.2 (2026-11-26)
 
 The right-hand menu by the library's page standard (Monday list item 31; liminal-libs 1.105.0's docs/PAGES.md and
 side.js): the view picked in the list (your account, a plugin, Codebase, This app) at the panel's top, and the row
