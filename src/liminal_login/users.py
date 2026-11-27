@@ -83,6 +83,11 @@ class WrongCode(ValueError):
     password (throttle.py)."""
 
 
+class WrongPassword(ValueError):
+    """The current password given for a change is not the user's. Told apart from a new password refused (too short)
+    because it is the one that was a guess: the app counts it as a failed sign-in (throttle.py; item 14's review, A6)."""
+
+
 def _refuse_again(row, sooner_than: float) -> None:
     """Whether a sign-up under way may be begun again or given a new code (the review of 2026-11-21, item 26): anyone
     could begin one again at once, with no time check, so the limit on new codes was nothing, a stranger could send
@@ -282,10 +287,11 @@ class UserStore:
 
     def change_password(self, name, old, new) -> User:
         """A new password: a new salt and unlock key, the same vault key wrapped again under it; the
-        pairs stay as they are. ValueError when the old one is wrong or the new one too short."""
+        pairs stay as they are. WrongPassword (a ValueError) when the old one is wrong, ValueError when the
+        new one is too short."""
         user = self.verify(name, old)
         if user is None:
-            raise ValueError("the current password is wrong")
+            raise WrongPassword("the current password is wrong")
         moved = self._rewrapped(user, new)
         with self._lock:
             self._rewrap(moved)

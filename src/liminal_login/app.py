@@ -56,7 +56,7 @@ from liminal_libs.sources.plugin import Keystore, LoginPlugin, LoginRefusal, Use
 from . import __version__
 from .routes import ROUTES
 from .throttle import Throttle
-from .users import CODE_MINUTES, DEFAULT_NAME, User, UserStore, WrongCode
+from .users import CODE_MINUTES, DEFAULT_NAME, User, UserStore, WrongCode, WrongPassword
 from .vault import PAIR_NAME, KeyPairStore, VaultClosed, store_file
 
 DIR_VAR = "LIMINAL_LOGIN_DIR"  # the login's folder (store/data/login by default): its own users, a superclass's folder each
@@ -133,6 +133,9 @@ SIGNUP_UNREAD_WHY = ("sign-up by email is closed on this login: its liminal-logi
 # What a sign-up's code is held back for (0.20.0): a wrong code is counted where a wrong password is (throttle.py), by
 # where it came from and by the address it was mailed to, so the two are said together
 WRONG_CODES = "wrong codes or failed sign-ins"
+# What a password change is held back for (item 14's review, A6): its current password, when wrong, is counted as a
+# failed sign-in is, for the user's name and from where it came, so the two are said together
+WRONG_PASSWORDS = "wrong passwords or failed sign-ins"
 CODE_SUBJECT = "Your {title} code"
 CODE_TEXT = ("Your code to create a {title} account is\n\n    {code}\n\n"
              "Type it on the page that asked for it within {minutes:g} minutes. If you did not ask for an "
@@ -1082,6 +1085,41 @@ class LoginApp(App):
             raise Refused(HTTPStatus.UNAUTHORIZED, "wrong name or password")
         return self._signed_in(user)
 
+    def _change_password(self, handler, s: Session, body: dict):
+        """The session's user's password changed (s.user moved onto the new one), or the 429 a change held back is
+        answered with. Its current password is checked as a sign-in's is (item 14's review, A6: a session left signed in
+        was an oracle for the account's password, each wrong guess a 400 at once, never counted, its key derived beside
+        any number of others): counted for the user's name and from where it came, in the failed sign-ins' counts,
+        before its key is derived, and past either limit answered 429 at once; taken back unless the current password
+        was wrong (a new one refused, an error); its keys derived behind the same gate as a sign-in's; a wrong one
+        waits the failure delay, then 400 as before."""
+        where, peer = self._origin(handler)
+        name = s.user.name
+        wait, at = self.throttle.tried(where, peer, name)
+        if at is None:
+            return self._wait_answer(wait, WRONG_PASSWORDS)
+        wrong = False
+        try:
+            with self.throttle.deriving(where):
+                changed = self.users.change_password(name, body.get("old"), body.get("new"))
+        except WrongPassword as e:
+            wrong = True
+            refusal = str(e)
+        except ValueError as e:  # the new one refused (too short): not a guess
+            raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
+        finally:
+            if wrong:
+                self._failed(where, peer, name, WRONG_PASSWORDS)
+            else:  # changed, or not a guess: nothing stays counted
+                self.throttle.forget(where, peer, name, at)
+        if wrong:
+            if self.failure_delay:
+                time.sleep(self.failure_delay)
+            self.log("login: a password change was refused (the current password was wrong)")
+            raise Refused(HTTPStatus.BAD_REQUEST, refusal)
+        s.user = changed
+        return None
+
     def _failed(self, where: str, peer: str, name: str, what: str = "failed sign-ins") -> None:
         """A wrong name or password, or a sign-up's wrong code (`what`), counted when it was tried (never the name, the
         password or the code in the log): said once it holds the next back."""
@@ -1204,10 +1242,9 @@ class LoginApp(App):
             return 200, self._me(self._require(handler))
         if path == "/api/me/password" and method == "PUT":
             s = self._require(handler)  # never the secret user: refused at the head of api() (0.16.1)
-            try:
-                s.user = self.users.change_password(s.user.name, body.get("old"), body.get("new"))
-            except ValueError as e:
-                raise Refused(HTTPStatus.BAD_REQUEST, str(e)) from None
+            held = self._change_password(handler, s, body)
+            if held is not None:
+                return held
             self.log(f"login: {s.user.name} changed their password")
             ended = self._end_others(s, "the password changed")  # signed in elsewhere with the old one: out
             return 200, {"changed": True, "unlockFingerprint": s.user.unlock_fingerprint, "otherSessionsEnded": ended}

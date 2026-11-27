@@ -22,6 +22,7 @@ from http.client import HTTPConnection
 from types import SimpleNamespace
 
 from liminal_libs import web
+from liminal_libs.apps import SESSION_HEADER
 from liminal_libs.web import WRITE_HEADER
 from liminal_login.throttle import Throttle
 
@@ -319,6 +320,85 @@ def test_the_keys_derived_at_once_are_bounded_and_the_machines_own_never_wait_be
     for t in threads:
         t.join(20)
     assert answers == [401] * 3 and seen == {"now": 0, "most": 2}
+
+
+def _signed_in(port, name="Ada", password="correct horse battery") -> dict:
+    """A program at this machine signed in: its writes, carrying the session it was given."""
+    status, data, _ = _call(port, "POST", "/api/sign-in", {"name": name, "password": password}, _here(port))
+    assert status == 200
+    return {**_here(port), SESSION_HEADER: data["token"]}
+
+
+def test_a_password_change_is_counted_as_a_sign_in_is(served):
+    """Item 14's review (A6): someone holding a session (a browser left signed in) could guess at the account's password
+    through PUT /api/me/password without end: each wrong one answered 400 at once, never counted, with no failure delay.
+    Its current password is now counted as a sign-in's is, for the user's name and from where it came, with the failed
+    sign-ins: past the limit the change is answered 429 before any key is derived, the right password too, and a
+    sign-in for the name waits with it. A change whose password was right, or whose new one is refused, is taken back."""
+    app, port, lines = served
+    app.users.create("Ada", "correct horse battery")
+    me = _signed_in(port)
+    clock = Clock()
+    app.throttle = Throttle(window=60, per_peer=50, per_name=2, clock=clock)
+    derived: list = []
+    verify = app.users.verify
+    app.users.verify = lambda who, password: derived.append(who) or verify(who, password)  # each key derived, noted
+    guess = {"old": "a wrong guess", "new": "a brand new password"}
+    for _ in range(2):
+        status, data, _ = _call(port, "PUT", "/api/me/password", guess, me)
+        assert status == 400 and data["error"] == "the current password is wrong"
+    status, data, r = _call(port, "PUT", "/api/me/password", guess, me)
+    assert status == 429 and r.getheader("Retry-After") == "60"
+    assert data["error"] == "too many wrong passwords or failed sign-ins: try again in 60 s"
+    assert derived == ["Ada", "Ada"]  # the third was answered before its key was derived
+    right = {"old": "correct horse battery", "new": "a brand new password"}
+    assert _call(port, "PUT", "/api/me/password", right, me)[0] == 429  # the right one waits too, as a sign-in's does
+    assert _call(port, "POST", "/api/sign-in", {"name": "ada", "password": "correct horse battery"}, _here(port))[0] == 429
+    assert any("too many wrong passwords or failed sign-ins at this machine" in m for m in lines)
+    # a front's are counted apart: nobody who reaches it is kept out by what was guessed at the machine, nor the reverse
+    assert app.throttle.wait("away", "198.51.100.7", "Ada") == 0.0
+    clock.now += 61  # the window passes: the right password changes it, and nothing stays counted for that try
+    status, data, _ = _call(port, "PUT", "/api/me/password", right, me)
+    assert status == 200 and data["changed"] is True
+    for _ in range(3):  # a new password refused is no guess: taken back, however often
+        status, data, _ = _call(port, "PUT", "/api/me/password", {"old": "a brand new password", "new": "short"}, me)
+        assert status == 400 and data["error"].startswith("a password is at least")
+    assert app.throttle.wait("here", "127.0.0.1", "Ada") == 0.0
+    assert not any("a wrong guess" in m or "correct horse battery" in m or "a brand new password" in m for m in lines)
+
+
+def test_a_password_changes_keys_are_derived_behind_the_sign_ins_gate(served):
+    """Item 14's review (A6): a change's keys (its current password's, then the new one's: scrypt, 32 MB each) were
+    derived beside any number of others at once. They wait for a turn as a sign-in's do. By its order: the only turn is
+    held while a change asks for it, and no key is derived for it until the turn is let go."""
+    app, port, lines = served
+    app.users.create("Ada", "correct horse battery")
+    me = _signed_in(port)
+    asked = threading.Semaphore(0)
+
+    class Watched(Throttle):
+        def deriving(self, where):
+            asked.release()  # a turn asked for
+            return super().deriving(where)
+
+    app.throttle = Watched(window=60, per_peer=50, per_name=50, at_once=1, clock=Clock())
+    derived: list = []
+    verify = app.users.verify
+    app.users.verify = lambda who, password: derived.append(who) or verify(who, password)
+    turn = app.throttle.deriving("here")
+    assert asked.acquire(timeout=5) and turn.acquire(timeout=5)  # the test's own ask: it holds the only turn
+    answers: list = []
+    change = threading.Thread(target=lambda: answers.append(_call(
+        port, "PUT", "/api/me/password", {"old": "correct horse battery", "new": "a brand new password"}, me)[0]),
+        daemon=True)
+    try:
+        change.start()
+        assert asked.acquire(timeout=10), "the change asked for its turn"
+        assert derived == [] and answers == []  # nothing derived for it while the turn is held
+    finally:
+        turn.release()
+    change.join(20)
+    assert answers == [200] and derived == ["Ada"]
 
 
 def test_a_host_typed_in_a_name_is_a_domain_never_an_address(served):

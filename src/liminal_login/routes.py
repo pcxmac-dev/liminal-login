@@ -43,7 +43,8 @@ ROUTES = (
     ("GET", "/api/me", "who is signed in: their name, their store and the fingerprints of the keys that mask it (a "
                        "remote user's asked of their own login)", "read", "page"),
     ("PUT", "/api/me/password", "their password changed, the vault key wrapped again and their other sessions ended "
-                                "(never the secret user's)", "change", "page"),
+                                "(never the secret user's); a wrong current password counted as a failed sign-in, 429 "
+                                "with Retry-After past the limits", "change", "page"),
     ("GET", "/api/pairs", "the names of their pairs, never a value (the library's LoginClient asks it too)", "read",
      "page"),
     ("GET", "/api/pairs/known", "the pairs the plugins of the app that holds it ask for, each set or not", "read",
