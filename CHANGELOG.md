@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.20.3 (2026-11-27)
+
+A password change is no longer an unthrottled password oracle (item 14's review, A6; a security fix). Someone holding a
+session, a browser left signed in, could `PUT /api/me/password` with guesses of the current password without end: each
+wrong one was answered 400 at once, never counted, with no failure delay, and its key was derived beside any number of
+others (scrypt, 32 MB each).
+- The current password is checked as a sign-in's password is: counted for the user's name and from where it came, in
+  the same counts as the failed sign-ins (10 for a name, 30 from an address, within 15 minutes), before its key is
+  derived. Past either limit the change is answered 429 with Retry-After at once ("too many wrong passwords or failed
+  sign-ins"), the right password too, and a sign-in for the name waits with it, as after failed sign-ins. A front's
+  are counted apart from the machine's own, as they are for sign-ins.
+- Its keys (the current password's, then the new one's) are derived behind the gate a sign-in's are, four at once from
+  each place.
+- A try is taken back unless its current password was wrong: a change made, or a new password refused (too short).
+  A wrong one stays counted, waits the failure delay, and is answered 400 as before.
+- Tests: tests/test_throttle.py (the counts, the 429 before any key is derived, the gate by its order).
+
 ## 0.20.2 (2026-11-26)
 
 The right-hand menu by the library's page standard (Monday list item 31; liminal-libs 1.105.0's docs/PAGES.md and

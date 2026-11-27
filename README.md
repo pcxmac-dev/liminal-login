@@ -32,7 +32,9 @@ the oldest of them is 15 minutes old. A try is counted before its key is derived
 the limits hold however many arrive together; four keys are derived at once from a front and four from the machine,
 the others waiting their turn. The counts are kept in memory, and a restart forgets them. This machine's own are
 counted too, apart from those of what a front hands on, so nobody who reaches a front keeps anyone at the machine out.
-The secret user and `default`, who have no password to guess, never wait. A sign-up's wrong codes are counted in the
+The secret user and `default`, who have no password to guess, never wait. A password change's current password is
+counted the same way when it is wrong, for the user's name, with the failed sign-ins (0.20.3): past the limits the
+change waits too, its keys derived behind the same gate. A sign-up's wrong codes are counted in the
 same counts, by the address they came from and by the email the code was mailed to (30 and 10, the email as a name):
 past either, a code typed is answered 429 before it is looked at, and no new code is sent for that email, or asked
 from that address, until the wait is over. What the counts do not do:
@@ -274,7 +276,8 @@ users without a password, from its own machine),
 `POST /api/signup`, `POST /api/signup/resend`, `POST /api/signup/verify`, `POST /api/signup/complete` (503 with how
 it is opened while sign-up by email is closed; the first three 429 with Retry-After once too many codes have been
 wrong),
-`GET /api/me`, `PUT /api/me/password`, `GET /api/pairs`, `GET|PUT|DELETE /api/pairs/<name>`,
+`GET /api/me`, `PUT /api/me/password` (429 with Retry-After once too many passwords have been wrong, 0.20.3),
+`GET /api/pairs`, `GET|PUT|DELETE /api/pairs/<name>`,
 `GET /api/pairs/known` (the pairs an inheriting app's plugins ask for; none on its own), `GET /api/tray`,
 `GET /api/app`, `GET /api/login-plugins`, `GET|POST /api/login-plugins/<name>/<tab>` (0.18.0). On a liminal-libs older
 than the one the login needs (1.98.0) every one of them answers 503 and says so (0.20.0).
